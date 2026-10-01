@@ -1,0 +1,22 @@
+{
+  "name": "@local/pi-openai",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "files": [
+    "extensions/"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/pi-openai-fast-mode/index.ts",
+      "./extensions/usage.ts"
+    ],
+    "skills": [],
+    "prompts": [],
+    "themes": []
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  }
+}

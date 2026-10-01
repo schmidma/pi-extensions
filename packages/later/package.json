@@ -1,0 +1,23 @@
+{
+  "name": "@local/pi-later",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "files": [
+    "extensions/"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/later/index.ts"
+    ],
+    "skills": [],
+    "prompts": [],
+    "themes": []
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "@earendil-works/pi-ai": "*",
+    "typebox": "*"
+  }
+}

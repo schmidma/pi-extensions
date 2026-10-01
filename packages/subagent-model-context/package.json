@@ -1,0 +1,20 @@
+{
+  "name": "@local/pi-subagent-model-context",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "files": [
+    "extensions/"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/subagent-model-context.ts"
+    ],
+    "skills": [],
+    "prompts": [],
+    "themes": []
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}

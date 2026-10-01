@@ -1,0 +1,23 @@
+{
+  "name": "@local/pi-terminal-ui",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "files": [
+    "extensions/"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/minimal-statusline.ts",
+      "./extensions/working-prompt/index.ts",
+      "./extensions/write-head-tail-preview.ts"
+    ],
+    "skills": [],
+    "prompts": [],
+    "themes": []
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  }
+}

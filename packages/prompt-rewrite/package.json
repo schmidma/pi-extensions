@@ -1,0 +1,21 @@
+{
+  "name": "@local/pi-prompt-rewrite",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "files": [
+    "extensions/"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/prompt-rewrite.ts"
+    ],
+    "skills": [],
+    "prompts": [],
+    "themes": []
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-ai": "*"
+  }
+}
