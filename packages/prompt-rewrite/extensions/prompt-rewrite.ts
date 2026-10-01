@@ -1,15 +1,14 @@
-import type { UserMessage } from "@earendil-works/pi-ai/compat";
+import { join } from "node:path";
+import { prepareRewrite, errorMessage, type RewriteResult } from "./rewrite-request.ts";
 import {
 	BorderedLoader,
+	getAgentDir,
 	type ExtensionAPI,
 	type ExtensionContext,
 	keyText,
 } from "@earendil-works/pi-coding-agent";
 
 const REWRITE_SHORTCUT = "alt+shift+e";
-const REWRITE_PROVIDER = "openai-codex";
-const REWRITE_MODEL_ID = "gpt-6-luna";
-const REWRITE_REASONING_EFFORT = "low";
 
 const SYSTEM_PROMPT = `Rewrite the user's draft prompt for a coding agent. The job is terminology compression and clarity, not invention.
 
@@ -34,108 +33,41 @@ Rules:
 9. Do not answer the request. Only rewrite the prompt.
 10. Output only the rewritten prompt text. Do not use Markdown fences or add commentary.`;
 
-type RewriteResult =
-	| { status: "success"; text: string }
-	| { status: "cancelled" }
-	| { status: "error"; message: string };
-
-function errorMessage(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
-}
-
 async function rewritePrompt(
 	ctx: ExtensionContext,
 	original: string,
+	parentSignal: AbortSignal,
 ): Promise<RewriteResult | undefined> {
-	const selectedModel = ctx.model;
-	const preferredModel = ctx.modelRegistry.find(
-		REWRITE_PROVIDER,
-		REWRITE_MODEL_ID,
-	);
-	const usePreferredModel =
-		preferredModel !== undefined &&
-		ctx.modelRegistry.hasConfiguredAuth(preferredModel);
-	const initialModel = usePreferredModel ? preferredModel : selectedModel;
-	if (!initialModel) {
-		return { status: "error", message: "No rewrite model available" };
+	let request: ReturnType<typeof prepareRewrite>;
+	try {
+		request = prepareRewrite(ctx, join(getAgentDir(), "prompt-rewrite.json"), original, SYSTEM_PROMPT);
+	} catch (error) {
+		return { status: "error", message: errorMessage(error) };
 	}
 
 	return ctx.ui.custom<RewriteResult>((tui, theme, _keybindings, done) => {
 		const loader = new BorderedLoader(
 			tui,
 			theme,
-			`Rewriting prompt with ${initialModel.provider}/${initialModel.id} (${REWRITE_REASONING_EFFORT})...`,
+			`Rewriting prompt with ${request.model.provider}/${request.model.id} (low)...`,
 		);
 		let settled = false;
 		const finish = (result: RewriteResult) => {
 			if (settled) return;
 			settled = true;
+			parentSignal.removeEventListener("abort", cancel);
 			done(result);
 		};
-
-		loader.onAbort = () => finish({ status: "cancelled" });
-
-		const run = async (): Promise<RewriteResult> => {
-			const message: UserMessage = {
-				role: "user",
-				content: [{ type: "text", text: original }],
-				timestamp: Date.now(),
-			};
-			const completeRewrite = async (
-				model: typeof initialModel,
-			): Promise<RewriteResult> => {
-				const response = await ctx.modelRegistry.complete(
-					model,
-					{ systemPrompt: SYSTEM_PROMPT, messages: [message] },
-					{
-						reasoningEffort: REWRITE_REASONING_EFFORT,
-						signal: loader.signal,
-					},
-				);
-				if (loader.signal.aborted || response.stopReason === "aborted") {
-					return { status: "cancelled" };
-				}
-				if (response.stopReason !== "stop") {
-					throw new Error(
-						`Model stopped before completing (${response.stopReason})`,
-					);
-				}
-
-				const text = response.content
-					.flatMap((block) => (block.type === "text" ? [block.text] : []))
-					.join("");
-				if (!text.trim()) {
-					throw new Error("Model returned an empty rewrite");
-				}
-				return { status: "success", text };
-			};
-
-			try {
-				return await completeRewrite(initialModel);
-			} catch (preferredError: unknown) {
-				const canFallback =
-					usePreferredModel &&
-					!loader.signal.aborted &&
-					selectedModel !== undefined &&
-					(selectedModel.provider !== initialModel.provider ||
-						selectedModel.id !== initialModel.id);
-				if (!canFallback) throw preferredError;
-
-				try {
-					return await completeRewrite(selectedModel);
-				} catch (fallbackError: unknown) {
-					throw new Error(
-						`Luna failed (${errorMessage(preferredError)}); fallback failed (${errorMessage(fallbackError)})`,
-					);
-				}
-			}
-		};
+		const cancel = () => finish({ status: "cancelled" });
+		parentSignal.addEventListener("abort", cancel, { once: true });
+		loader.onAbort = cancel;
+		const signal = AbortSignal.any([loader.signal, parentSignal]);
 
 		void (async () => {
 			try {
-				finish(await run());
+				finish(await request.run(signal));
 			} catch (error: unknown) {
-				if (loader.signal.aborted) {
+				if (signal.aborted) {
 					finish({ status: "cancelled" });
 					return;
 				}
@@ -149,6 +81,8 @@ async function rewritePrompt(
 
 export default function promptRewriteExtension(pi: ExtensionAPI): void {
 	let rewriting = false;
+	let activeRewrite: AbortController | undefined;
+	pi.on("session_shutdown", () => activeRewrite?.abort());
 
 	pi.registerShortcut(REWRITE_SHORTCUT, {
 		description: "Rewrite the current prompt for clarity",
@@ -169,12 +103,16 @@ export default function promptRewriteExtension(pi: ExtensionAPI): void {
 			}
 
 			rewriting = true;
+			const requestController = new AbortController();
+			activeRewrite = requestController;
 			let result: RewriteResult | undefined;
 			try {
-				result = await rewritePrompt(ctx, original);
+				result = await rewritePrompt(ctx, original, requestController.signal);
 			} finally {
 				rewriting = false;
+				activeRewrite = undefined;
 			}
+			if (requestController.signal.aborted) return;
 
 			if (!result) {
 				ctx.ui.notify("Prompt rewrite failed", "error");

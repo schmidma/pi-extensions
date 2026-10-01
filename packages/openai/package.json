@@ -2,6 +2,7 @@
   "name": "@local/pi-openai",
   "version": "0.0.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "files": [
     "extensions/"
