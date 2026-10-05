@@ -1,0 +1,22 @@
+{
+  "name": "@local/pi-copy-code",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "files": [
+    "extensions/"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/copy-code/index.ts"
+    ],
+    "skills": [],
+    "prompts": [],
+    "themes": []
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  }
+}

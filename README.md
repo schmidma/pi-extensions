@@ -1,10 +1,11 @@
 # Pi extensions
 
-Seven independent local packages for Pi.
+Eight independent local packages for Pi.
 
 | Package | Purpose |
 | --- | --- |
 | [completion-keys](packages/completion-keys/README.md) | Completion shortcuts |
+| [copy-code](packages/copy-code/README.md) | Copy code blocks from assistant responses |
 | [later](packages/later/README.md) | Private saved items |
 | [openai](packages/openai/README.md) | Fast mode and usage limits |
 | [prompt-rewrite](packages/prompt-rewrite/README.md) | Rewrite editor drafts |
@@ -22,7 +23,8 @@ Local packages load from this checkout, without copying. External configuration
 and data paths below default to `~/.pi/agent`; if `PI_CODING_AGENT_DIR` is set,
 use that directory instead in all package guides.
 
-Tests require Node with TypeScript and `node:sqlite` support, plus Bun:
+Tests require Node with TypeScript and `node:sqlite` support, plus Bun.
+Copy-code tests also require Pi installed on `PATH` (using its bundled jiti):
 
 ```sh
 npm test
