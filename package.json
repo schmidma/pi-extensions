@@ -8,11 +8,12 @@
     "packages/*"
   ],
   "scripts": {
-    "test": "npm run test:later && npm run test:ui && npm run test:rewrite && npm run test:model-extensions && npm run test:copy-code",
+    "test": "npm run test:later && npm run test:ui && npm run test:rewrite && npm run test:model-extensions && npm run test:copy-code && npm run test:subagents",
     "test:later": "node --test packages/later/extensions/later/*.test.ts",
     "test:ui": "bun test ./packages/terminal-ui/extensions ./packages/session-naming/extensions",
     "test:rewrite": "bun test ./packages/prompt-rewrite/extensions",
     "test:model-extensions": "bun test ./tests/model-extensions.test.ts",
-    "test:copy-code": "node --test packages/copy-code/extensions/copy-code/index.test.mjs"
+    "test:copy-code": "node --test packages/copy-code/extensions/copy-code/index.test.mjs",
+    "test:subagents": "bun test --preload ./packages/subagents/tests/host-runtime.ts ./packages/subagents/tests"
   }
 }
