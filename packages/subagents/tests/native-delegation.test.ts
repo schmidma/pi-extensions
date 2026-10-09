@@ -883,7 +883,7 @@ for (const mode of ["success", "success-reload", "failure", "cancelled"] as cons
   } finally { delayed.resolve(); await f.cleanup(); }
 }, 10000);
 
-test("real extension retains running child through root settled and actual reload, then delivers one full idle report", async () => {
+for (const response of ["Main yields while child works", ""]) test(`real extension retains running child through ${response ? "text" : "empty"} root yield and actual reload, then delivers one full idle report`, async () => {
   const f = await rootFixture();
   try {
     const rootRun = f.session.prompt("delegate");
@@ -891,19 +891,27 @@ test("real extension retains running child through root settled and actual reloa
     const a = await f.fake.next(), b = await f.fake.next();
     const childRequest = JSON.stringify(a.context.messages).includes("saved-role-body") ? a : b;
     const parentRequest = childRequest === a ? b : a;
-    parentRequest.finish("Main yields while child works");
-    await rootRun;
+    parentRequest.finish(response);
+    await bounded(rootRun);
     const ack = acknowledgement(f.session);
     const service = processServices().get(rootIdentity(f.manager))!;
     const child = service.runtime(ack.agentId);
     expect(child).toBeDefined();
     expect(child!.idle).toBe(false);
+    expect(f.session.isIdle).toBe(true);
+    expect(service.store.state.runs[ack.runId]).toMatchObject({ phase: "running", delivered: false });
+    expect(service.store.state.runs[ack.runId].outcome).toBeUndefined();
+    expect(service.records[0].currentRun).toBe(ack.runId);
+    expect(f.fake.calls()).toBe(3); // Yield does not launch a request just to wait.
     await f.session.reload();
     expect(processServices().get(rootIdentity(f.manager))).toBe(service);
     expect(service.runtime(ack.agentId)).toBe(child);
+    expect(f.session.isIdle).toBe(true);
+    expect(f.fake.calls()).toBe(3);
     const full = "untruncated child report\n".repeat(12000);
     childRequest.finish(full);
-    const wake = await f.fake.next();
+    const wake = await bounded(f.fake.next());
+    expect(f.fake.calls()).toBe(4); // The child report alone automatically wakes its parent.
     expect(JSON.stringify(wake.context.messages)).toContain(full.replaceAll("\n", "\\n"));
     wake.finish("Main processed report");
     await f.session.waitForIdle();
@@ -911,6 +919,12 @@ test("real extension retains running child through root settled and actual reloa
     const receipts = f.manager.getEntries().filter(entry => entry.type === "custom_message" && entry.customType === REPORT_TYPE);
     expect(receipts).toHaveLength(1);
     expect(service.store.state.runs[ack.runId].delivered).toBe(true);
+    expect(service.store.state.runs[ack.runId].outcome).toMatchObject({ status: "completed", text: full });
+    expect(Object.keys(service.store.state.runs)).toEqual([ack.runId]);
+    expect((receipts[0] as any).details.runId).toBe(ack.runId);
+    expect(f.session.isIdle).toBe(true);
+    expect(f.session.getLastAssistantText()).toBe("Main processed report");
+    expect(f.fake.calls()).toBe(4); // No duplicate delivery or waiting request after processing.
   } finally { await f.cleanup(); }
 }, 20000);
 
@@ -1190,8 +1204,17 @@ for (const mode of ["no-files", "unselected", "append", "replace"] as const) tes
         "keep the brief proportional to the task",
         "State whether the task is read-only or may modify files",
         "Do not predict or present a pending subagent's findings",
-        "rather than repeating the same investigation",
-        "Targeted verification of returned findings remains appropriate",
+        "While a delegated investigation is pending, leave that investigation to the subagent",
+        "Do not repeat its searches or evidence gathering",
+        "When verification is needed, check specific returned findings rather than restarting the investigation",
+        "Deliberate independent cross-checks are a separate, explicit choice",
+        "While subagents work, do genuinely independent work if any remains",
+        "If your next useful step depends on their reports, end your current turn without a substantive final answer",
+        "an empty response is permitted",
+        "This applies to the main agent as well as subagents",
+        "Yielding is not completing the user's task or conversation: unfinished subagents continue",
+        "their reports automatically start another turn for you without a user prompt",
+        "Do not sleep, poll, or make dummy tool calls to wait for subagents",
       ]) expect(supplied).toContain(guidance);
     }
     expect(context).toContain("child task");
@@ -1204,7 +1227,16 @@ for (const mode of ["no-files", "unselected", "append", "replace"] as const) tes
     expect(tools.sort()).toEqual([...CHILD_TOOLS, "spawn_subagent", "resume_subagent", "steer_subagent"].sort());
     const ack = acknowledgement(f.session);
     const result = f.session.messages.find(message => message.role === "toolResult" && message.toolName === "spawn_subagent")!;
-    expect(JSON.stringify(result)).toContain("Subagent Review authentication accepted");
+    const assertAcknowledgement = (toolName: string, toolCallId: string, request: Request) => {
+      const results = f.session.messages.filter(message => message.role === "toolResult" && message.toolName === toolName && message.toolCallId === toolCallId);
+      expect(results).toHaveLength(1);
+      expect(JSON.stringify(results[0])).toContain("Subagent Review authentication accepted. Its report will arrive automatically.");
+      expect(JSON.stringify(results[0])).toContain("If blocked on this report, end your turn; do not sleep or poll.");
+      const supplied = request.context.messages.filter(message => message.role === "toolResult" && message.toolCallId === toolCallId);
+      expect(supplied).toHaveLength(1);
+      expect(JSON.stringify(supplied[0])).toContain("If blocked on this report, end your turn; do not sleep or poll.");
+    };
+    assertAcknowledgement("spawn_subagent", "delegate", parent);
     const details = (result as any).details;
     expect(details).toMatchObject({ name: "Review authentication", agent_id: ack.agentId, run_id: ack.runId, model: "fixture/model", requestedThinking: "high", effectiveThinking: "off" });
     expect(details).not.toHaveProperty("description");
@@ -1220,6 +1252,7 @@ for (const mode of ["no-files", "unselected", "append", "replace"] as const) tes
     if (mode !== "no-files") writeFileSync(join(f.directory, "agents/worker.md"), "---\nname: worker\n---\nchanged-role-body");
     parent.finish("", "toolUse", [{ type: "toolCall", id: "warm", name: "resume_subagent", arguments: { agent_id: ack.agentId, prompt: "review auth.ts" } }]);
     ({ child, parent } = await pair());
+    assertAcknowledgement("resume_subagent", "warm", parent);
     const warm = JSON.stringify(child.context.messages);
     expect(warm).toContain("Which file should I review?");
     expect(warm).toContain("review auth.ts");
@@ -1237,6 +1270,7 @@ for (const mode of ["no-files", "unselected", "append", "replace"] as const) tes
     const coldRun = f.session.prompt("continue that same review");
     (await bounded(f.fake.next())).finish("", "toolUse", [{ type: "toolCall", id: "cold", name: "resume_subagent", arguments: { agent_id: ack.agentId, prompt: "review another file" } }]);
     ({ child, parent } = await pair());
+    assertAcknowledgement("resume_subagent", "cold", parent);
     const cold = JSON.stringify(child.context.messages);
     expect(cold).toContain("Warm review report");
     expect(cold).not.toContain("changed-role-body");

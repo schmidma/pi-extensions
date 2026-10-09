@@ -18,7 +18,7 @@ export interface BridgeAccess {
 function accepted(ack: Awaited<ReturnType<Coordinator["invoke"]>>) {
   const { agentId, runId, name, ...rest } = ack;
   const details = { name, agent_id: agentId, run_id: runId, ...rest };
-  return { content: [{ type: "text" as const, text: `Subagent ${ack.name} accepted. Its report will arrive automatically.\n${JSON.stringify(details)}` }], details };
+  return { content: [{ type: "text" as const, text: `Subagent ${ack.name} accepted. Its report will arrive automatically. If blocked on this report, end your turn; do not sleep or poll.\n${JSON.stringify(details)}` }], details };
 }
 export function registerBridge(pi: ExtensionAPI, access: BridgeAccess): void {
   let presentationService: Coordinator | undefined;

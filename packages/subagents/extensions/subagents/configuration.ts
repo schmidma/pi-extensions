@@ -137,9 +137,10 @@ export function delegationContext(models: EligibleModel[], roles: Map<string, Ro
     ...[...roles.values()].map(role => `- ${role.name}: ${role.description}`),
     "</subagent_roles>",
     "<subagent_coordination>",
-    "Subagents may delegate in turn, but each agent controls only its own direct children. One full report per run arrives automatically at the immediate parent; do not poll. A subagent with unfinished children may end its response and wait: its provisional answer is withheld until it has processed every child report in a successful response. Subagent questions and blockers are terminal prose reports to the immediate parent; subagents must not ask the user directly.",
+    "Subagents may delegate in turn, but each agent controls only its own direct children. One full report per run arrives automatically at the immediate parent. A subagent with unfinished children may end its response and wait: its provisional answer is withheld until it has processed every child report in a successful response. Subagent questions and blockers are terminal prose reports to the immediate parent; subagents must not ask the user directly.",
     "An acknowledgment confirms acceptance, not findings. Do not predict or present a pending subagent's findings.",
-    "While delegated work is running, pursue other useful work rather than repeating the same investigation. Targeted verification of returned findings remains appropriate.",
+    "While a delegated investigation is pending, leave that investigation to the subagent. Do not repeat its searches or evidence gathering. When verification is needed, check specific returned findings rather than restarting the investigation. Deliberate independent cross-checks are a separate, explicit choice.",
+    "While subagents work, do genuinely independent work if any remains. If your next useful step depends on their reports, end your current turn without a substantive final answer; an empty response is permitted. This applies to the main agent as well as subagents. Yielding is not completing the user's task or conversation: unfinished subagents continue, and their reports automatically start another turn for you without a user prompt. Do not sleep, poll, or make dummy tool calls to wait for subagents.",
     "</subagent_coordination>"].join("\n");
 }
 export function replaceRoster(prompt: string, context: string): string {
