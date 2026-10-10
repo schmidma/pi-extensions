@@ -11,7 +11,8 @@
     "extensions": [
       "./extensions/minimal-statusline.ts",
       "./extensions/working-prompt/index.ts",
-      "./extensions/write-head-tail-preview.ts"
+      "./extensions/write-head-tail-preview.ts",
+      "./extensions/tool-lifecycle/index.ts"
     ],
     "skills": [],
     "prompts": [],

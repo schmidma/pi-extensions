@@ -27,6 +27,9 @@ export function delegationRenderers(name: string, lookup: RecordLookup = noLooku
     renderShell: "self",
     renderCall(rawArgs, theme, context) {
       const args = objectFields(rawArgs);
+      // Optional terminal-ui decorator supplies a heading marker without touching
+      // shared call/result state or putting a marker on the card's padding.
+      const marker = (context as typeof context & { [key: symbol]: unknown })[Symbol.for("pi-extensions.tool-heading-marker")];
       // One shell owns both slots, including native padding. A concrete fallback
       // keeps System's transparent panels visible without imposing a dark theme.
       const card = cardBox(theme);
@@ -43,7 +46,8 @@ export function delegationRenderers(name: string, lookup: RecordLookup = noLooku
         const saved = id && (needsName || needsMetadata) ? lookup(id) : undefined;
         const title = stringField(info.name) ?? stringField(args.name) ?? saved?.name ?? id ?? "...";
         const identity = id && title !== id ? ` [${shortId(id)}]` : "";
-        let line = theme.fg("toolTitle", theme.bold(`${label}:`) + ` ${metadataText(title)}`) + theme.fg("dim", identity);
+        let line = (typeof marker === "function" ? `${marker()} ` : "")
+          + theme.fg("toolTitle", theme.bold(`${label}:`) + ` ${metadataText(title)}`) + theme.fg("dim", identity);
         if (!steer && !context.expanded) {
           const model = stringField(info.model) ?? stringField(args.model) ?? saved?.model;
           const thinking = stringField(info.effectiveThinking) ?? saved?.effectiveThinking ?? stringField(args.thinking);
