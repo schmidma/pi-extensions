@@ -1,0 +1,21 @@
+{
+  "name": "@local/pi-tool-replay",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "files": ["extensions/"],
+  "scripts": {
+    "test": "bun test ./tests"
+  },
+  "pi": {
+    "extensions": ["./extensions/tool-replay/index.ts"],
+    "skills": [],
+    "prompts": [],
+    "themes": []
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  }
+}

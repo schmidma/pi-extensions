@@ -13,6 +13,7 @@ Independent local packages for Pi.
 | [subagent-model-context](packages/subagent-model-context/README.md) | Available subagent models |
 | [subagents](packages/subagents/README.md) | Nested delegation and native transcript inspection |
 | [terminal-ui](packages/terminal-ui/README.md) | Footer, spinner, write previews |
+| [tool-replay](packages/tool-replay/README.md) | Repeat tool calls by short handle |
 
 From the checkout root, replace `PACKAGE` with a name from the table:
 
@@ -25,7 +26,7 @@ and data paths below default to `~/.pi/agent`; if `PI_CODING_AGENT_DIR` is set,
 use that directory instead in all package guides.
 
 Tests require Node with TypeScript and `node:sqlite` support, plus Bun.
-Copy-code and subagent tests also require Pi installed on `PATH`:
+Copy-code, subagent, and tool-replay tests also require Pi installed on `PATH`:
 
 ```sh
 npm test
