@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-wor
 import { Type } from "typebox";
 
 const ENTRY_TYPE = "tool-replay.handle";
+const RESULT_ENTRY_TYPE = "tool-replay.result";
 const HANDLE_PATTERN = "^r[1-9a-z][0-9a-z]*$";
 const handlePattern = new RegExp(HANDLE_PATTERN);
 
@@ -32,6 +33,7 @@ const marker = (handle: string) => ({ type: "text" as const, text: `[Replay hand
 
 export default function toolReplay(pi: ExtensionAPI) {
   const handles = new Map<string, ReplayHandle>();
+  const resultHandles = new Map<string, string>();
   const calls = new Map<string, { assistantEntryId: string; callIndex: number }>();
   const branchIds = new Set<string>();
   let nextHandle = 1n;
@@ -44,11 +46,17 @@ export default function toolReplay(pi: ExtensionAPI) {
     if (number !== undefined && number >= nextHandle) nextHandle = number + 1n;
   }
 
-  function index(entry: SessionEntry) {
+  function index(entry: SessionEntry, ctx: ExtensionContext) {
     branchIds.add(entry.id);
     reserve(entry);
-    if (entry.type === "custom" && entry.customType === ENTRY_TYPE && isReplayHandle(entry.data)) {
-      handles.set(entry.data.handle, entry.data);
+    if (entry.type === "custom" &&
+      (entry.customType === ENTRY_TYPE || entry.customType === RESULT_ENTRY_TYPE) && isReplayHandle(entry.data)) {
+      if (entry.customType === ENTRY_TYPE) handles.set(entry.data.handle, entry.data);
+      const source = ctx.sessionManager.getEntry(entry.data.assistantEntryId);
+      if (source?.type === "message" && source.message.role === "assistant" && branchIds.has(source.id)) {
+        const call = source.message.content[entry.data.callIndex];
+        if (call?.type === "toolCall") resultHandles.set(call.id, entry.data.handle);
+      }
     }
     if (entry.type !== "message" || entry.message.role !== "assistant") return;
     entry.message.content.forEach((block, callIndex) => {
@@ -58,12 +66,13 @@ export default function toolReplay(pi: ExtensionAPI) {
 
   function rebuild(ctx: ExtensionContext) {
     handles.clear();
+    resultHandles.clear();
     calls.clear();
     branchIds.clear();
     nextHandle = 1n;
     // Reserve abandoned-branch handles too: a handle must never change meaning after /tree.
     for (const entry of ctx.sessionManager.getEntries()) reserve(entry);
-    for (const entry of ctx.sessionManager.getBranch()) index(entry);
+    for (const entry of ctx.sessionManager.getBranch()) index(entry, ctx);
     indexedLeafId = ctx.sessionManager.getLeafId();
     sessionId = ctx.sessionManager.getSessionId();
   }
@@ -78,7 +87,7 @@ export default function toolReplay(pi: ExtensionAPI) {
       entry = entry.parentId ? ctx.sessionManager.getEntry(entry.parentId) : undefined;
     }
     if (indexedLeafId !== null && !entry) return rebuild(ctx);
-    for (const item of tail.reverse()) index(item);
+    for (const item of tail.reverse()) index(item, ctx);
     indexedLeafId = ctx.sessionManager.getLeafId();
   }
 
@@ -103,10 +112,20 @@ export default function toolReplay(pi: ExtensionAPI) {
     // Allocate and persist synchronously, including when sibling tools finish concurrently.
     pi.appendEntry(ENTRY_TYPE, record);
     handles.set(record.handle, record);
+  });
+
+  // Request-only projection: leave persisted results, execution events, and renderers alone.
+  pi.on("context", (event, ctx) => {
+    sync(ctx);
     return {
-      content: [...event.content, marker(record.handle)],
-      details: event.details,
-      structuredContent: event.structuredContent,
+      messages: event.messages.map(message => {
+        if (message.role !== "toolResult") return message;
+        const handle = resultHandles.get(message.toolCallId);
+        if (!handle) return message;
+        const addition = marker(handle);
+        if (message.content.some(block => block.type === "text" && block.text === addition.text)) return message;
+        return { ...message, content: [...message.content, addition] };
+      }),
     };
   });
 
@@ -116,7 +135,7 @@ export default function toolReplay(pi: ExtensionAPI) {
     exposure: "model-only",
     description: "Execute a previous tool call AGAIN using its [Replay handle: rX] and original arguments, not cached results. Side effects happen again. Uses CURRENT tool availability, argument validation, permission/hooks, and environment. Handles are session/branch-local; hidden and model-only tools cannot be replayed.",
     parameters: Type.Object({ handle: Type.String({ pattern: HANDLE_PATTERN, description: "Replay handle from a previous tool result, e.g. r1" }) }),
-    async execute(_toolCallId, { handle }, signal, onUpdate, ctx) {
+    async execute(toolCallId, { handle }, signal, onUpdate, ctx) {
       if (handleNumber(handle) === undefined) throw new Error("Malformed replay handle");
       sync(ctx);
       const record = handles.get(handle);
@@ -137,9 +156,13 @@ export default function toolReplay(pi: ExtensionAPI) {
           onUpdate(partial);
         } : undefined,
       });
+      // Associate this result with the ORIGINAL handle, without allocating a replayable replay.
+      // Persist the association so the model-only projection also works after reload/compaction.
+      const reference = calls.get(toolCallId);
+      if (reference) pi.appendEntry(RESULT_ENTRY_TYPE, { version: 1, handle, ...reference, cwd: ctx.cwd } satisfies ReplayHandle);
       // Pi automatically aggregates nested usage onto our result. Do not count it twice.
       const { usage: _usage, ...replayed } = result;
-      return { ...replayed, isError, content: [...result.content, marker(handle)] };
+      return { ...replayed, isError };
     },
   });
 }

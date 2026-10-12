@@ -7,7 +7,8 @@ import { dirname, join, resolve } from "node:path";
 // Exercise the installed host, including its loader, validation, hooks, and nested-call accounting.
 let host = process.env.PI_TOOL_REPLAY_HOST;
 if (!host) {
-  let directory = dirname(realpathSync(execFileSync("which", ["pi"], { encoding: "utf8" }).trim()));
+  const executable = realpathSync(execFileSync("which", ["pi"], { encoding: "utf8" }).trim());
+  let directory = dirname(executable);
   while (directory !== dirname(directory)) {
     try {
       if (JSON.parse(readFileSync(join(directory, "package.json"), "utf8")).name === "@earendil-works/pi-coding-agent") {
@@ -17,11 +18,19 @@ if (!host) {
     } catch {}
     directory = dirname(directory);
   }
+  if (!host) {
+    // Managed installs put a shell launcher on PATH rather than a package-local JS binary.
+    const installRoot = process.env.PI_MANAGED_INSTALL_ROOT ?? join(dirname(executable), "..", "install");
+    const version = readFileSync(join(installRoot, "current-version"), "utf8").trim();
+    if (!/^[0-9A-Za-z][0-9A-Za-z._+-]*$/.test(version)) throw new Error("Invalid managed Pi version");
+    host = realpathSync(join(installRoot, "releases", version, "node_modules/@earendil-works/pi-coding-agent"));
+  }
 }
 if (!host) throw new Error("Install Pi on PATH or set PI_TOOL_REPLAY_HOST to its package directory");
+console.log(`[replay tests] pi-coding-agent@${JSON.parse(readFileSync(join(host, "package.json"), "utf8")).version} (${host})`);
 const { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } = await import(join(host, "dist/index.js"));
-const { createAssistantMessageEventStream } = await import(join(host, "node_modules/@earendil-works/pi-ai/dist/index.js"));
-const { Type } = await import(join(host, "node_modules/typebox/build/index.mjs"));
+const { createAssistantMessageEventStream } = await import(Bun.resolveSync("@earendil-works/pi-ai", host));
+const { Type } = await import(Bun.resolveSync("typebox", host));
 const packagePath = resolve(import.meta.dir, "..");
 const zeroUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
 const toolUsage = { ...zeroUsage, input: 7, totalTokens: 7 };
@@ -29,6 +38,7 @@ const cleanups: (() => void)[] = [];
 afterEach(() => { for (const cleanup of cleanups.splice(0).reverse()) cleanup(); });
 
 type Call = { name: string; arguments: Record<string, unknown> };
+let fixtureSequence = 0;
 async function fixture(options: { directory?: string; manager?: any; requireExtra?: boolean } = {}) {
   const directory = options.directory ?? mkdtempSync(join(tmpdir(), "pi-tool-replay-"));
   if (!options.directory) cleanups.push(() => rmSync(directory, { recursive: true, force: true }));
@@ -36,12 +46,15 @@ async function fixture(options: { directory?: string; manager?: any; requireExtr
   const runtime = await ModelRuntime.create({ authPath: join(directory, "auth.json"), modelsPath: null, refreshOnCreate: false });
   let planned: Call[] = [];
   let sequence = 0;
+  const callPrefix = `fixture-${++fixtureSequence}`;
+  const requests: any[] = [];
   runtime.registerProvider("replay-fixture", {
     api: "replay-fixture", baseUrl: "https://fixture.invalid", apiKey: "fixture",
     models: [{ id: "model", name: "Fixture", reasoning: false, input: ["text"], cost: zeroUsage.cost, contextWindow: 1000000, maxTokens: 10000 }],
-    streamSimple(model: any) {
+    streamSimple(model: any, context: any) {
+      requests.push(structuredClone(context.messages));
       const content: any[] = planned.length ? [{ type: "text", text: "Calling tools" },
-        ...planned.map(call => ({ type: "toolCall", id: `call-${++sequence}`, ...call }))] : [];
+        ...planned.map(call => ({ type: "toolCall", id: `${callPrefix}-call-${++sequence}`, ...call }))] : [];
       planned = [];
       const message = { role: "assistant", content, api: model.api, provider: model.provider, model: model.id,
         usage: zeroUsage, stopReason: content.length ? "toolUse" : "stop", timestamp: Date.now() };
@@ -55,7 +68,7 @@ async function fixture(options: { directory?: string; manager?: any; requireExtr
   await runtime.getAvailable();
   const model = runtime.getModel("replay-fixture", "model");
   const executed: any[] = [], nestedEvents: any[] = [], updates: any[] = [], ended: any[] = [];
-  const control = { block: false, mutation: "", abort: false };
+  const control = { block: false, mutation: "", replayHandle: "", abort: false };
   let api: any;
   const definition = (name: string, exposure = "direct") => ({
     name, label: name, description: "Fixture", exposure,
@@ -87,6 +100,7 @@ async function fixture(options: { directory?: string; manager?: any; requireExtr
       pi.on("tool_call", (event: any) => {
         if (event.toolName === "fixture" && control.block) return { block: true, reason: "permission denied" };
         if (event.toolName === "fixture" && control.mutation) event.input.text = control.mutation;
+        if (event.toolName === "replay_tool" && control.replayHandle) event.input.handle = control.replayHandle;
       });
       pi.on("tool_result", (event: any) => { if (event.parentToolCallId) nestedEvents.push(event); });
       pi.on("tool_execution_update", (event: any) => updates.push(event));
@@ -108,10 +122,15 @@ async function fixture(options: { directory?: string; manager?: any; requireExtr
     return manager.getEntries().slice(before).filter((entry: any) => entry.type === "message" && entry.message.role === "toolResult").map((entry: any) => entry.message);
   }
   const replay = (handle: string) => invoke([{ name: "replay_tool", arguments: { handle } }]).then(results => results[0]);
-  return { directory, session, manager, executed, control, api, nestedEvents, updates, ended, invoke, replay };
+  const modelResult = (result: any) => {
+    const matches = requests.at(-1).filter((message: any) => message.role === "toolResult" && message.toolCallId === result.toolCallId);
+    expect(matches).toHaveLength(1);
+    return matches[0];
+  };
+  return { directory, session, manager, executed, control, api, nestedEvents, updates, ended, requests, modelResult, invoke, replay };
 }
 const call = (text: string, value: unknown = 1): Call => ({ name: "fixture", arguments: { text, nested: { value } } });
-const handleOf = (result: any) => result.content.at(-1).text.match(/^\[Replay handle: (r[1-9a-z][0-9a-z]*)\]$/)?.[1];
+const handleOf = (result: any) => result.content.at(-1)?.text?.match(/^\[Replay handle: (r[1-9a-z][0-9a-z]*)\]$/)?.[1];
 const records = (manager: any) => manager.getEntries().filter((entry: any) => entry.type === "custom" && entry.customType === "tool-replay.handle");
 const textOf = (result: any) => result.content.filter((block: any) => block.type === "text").map((block: any) => block.text).join("\n");
 
@@ -119,17 +138,26 @@ test("replays exact raw arguments and rich results, preserves handles/errors, an
   const f = await fixture();
   const args = call("long original argument ".repeat(200), "2");
   const [original] = await f.invoke([args]);
-  const handle = handleOf(original);
+  const handle = handleOf(f.modelResult(original));
   expect(handle).toBe("r1");
+  expect(original.content).toEqual([
+    { type: "text", text: args.arguments.text }, { type: "image", mimeType: "image/png", data: "" },
+  ]);
+  expect(f.ended[0].result.content).toEqual(original.content);
+  expect(handleOf(original)).toBeUndefined();
   expect(f.ended[0].result.structuredContent).toEqual({ text: args.arguments.text });
   expect(original.details).toEqual({ nested: { value: 2 } });
   const originalCall = f.manager.getEntries().find((entry: any) => entry.type === "message" && entry.message.role === "assistant" && entry.message.content.some((block: any) => block.type === "toolCall"));
   expect(originalCall.message.content[1].arguments).toEqual(args.arguments); // Host validation does not mutate raw history.
   expect(records(f.manager)[0].data.callIndex).toBe(1);
+  expect(f.api.getAllTools().filter((tool: any) => tool.name === "replay_tool")).toHaveLength(1);
   expect(f.api.getAllTools().find((tool: any) => tool.name === "replay_tool").exposure).toBe("model-only");
   const replayed = await f.replay(handle);
   expect(f.executed).toEqual([{ text: args.arguments.text, nested: { value: 2 } }, { text: args.arguments.text, nested: { value: 2 } }]);
   expect(replayed.content).toEqual(original.content);
+  expect(f.ended.find(event => event.toolName === "replay_tool").result.content).toEqual(original.content);
+  expect(handleOf(f.modelResult(replayed))).toBe(handle);
+  expect((await f.replay(handleOf(f.modelResult(replayed)))).content).toEqual(original.content);
   expect(replayed.details).toEqual(original.details);
   expect(f.ended.find(event => event.toolName === "replay_tool").result.structuredContent).toEqual({ text: args.arguments.text });
   expect(replayed.usage.totalTokens).toBe(7);
@@ -141,19 +169,70 @@ test("replays exact raw arguments and rich results, preserves handles/errors, an
   for (const text of ["throw", "error"]) {
     const [failed] = await f.invoke([call(text)]);
     expect(failed.isError).toBe(true);
-    const repeated = await f.replay(handleOf(failed));
+    const failedHandle = handleOf(f.modelResult(failed));
+    const repeated = await f.replay(failedHandle);
     expect(repeated.isError).toBe(true);
     expect(textOf(repeated)).toBe(textOf(failed));
+    expect(handleOf(f.modelResult(repeated))).toBe(failedHandle);
   }
+});
+
+test("model-only markers are idempotent and reconstruct for retained originals and replays", async () => {
+  const f = await fixture();
+  const [original] = await f.invoke([call("original")]);
+  const replayed = await f.replay("r1");
+  const raw = f.manager.buildSessionContext().messages;
+  const before = structuredClone(raw);
+  const once = await f.session.extensionRunner.emitContext(raw);
+  const twice = await f.session.extensionRunner.emitContext(once);
+  expect(raw).toEqual(before);
+  expect(twice).toEqual(once);
+  for (const result of [original, replayed]) {
+    const projected = twice.find((message: any) => message.role === "toolResult" && message.toolCallId === result.toolCallId);
+    expect(projected.content).toEqual([...result.content, { type: "text", text: "[Replay handle: r1]" }]);
+  }
+  expect(f.session.messages.filter((message: any) => message.role === "toolResult").every((message: any) => !textOf(message).includes("[Replay handle:"))).toBe(true);
+  const storedResults = readFileSync(f.manager.getSessionFile(), "utf8").trim().split("\n").map(line => JSON.parse(line))
+    .filter(entry => entry.type === "message" && entry.message.role === "toolResult");
+  expect(storedResults.every(entry => !textOf(entry.message).includes("[Replay handle:"))).toBe(true);
+
+  const source = records(f.manager)[0].data;
+  f.manager.appendCompaction("summary", source.assistantEntryId, 100);
+  const reopened = await fixture({ directory: f.directory, manager: SessionManager.open(f.manager.getSessionFile()) });
+  await reopened.invoke([]);
+  expect(handleOf(reopened.modelResult(original))).toBe("r1");
+  expect(handleOf(reopened.modelResult(replayed))).toBe("r1");
+  const repeated = await reopened.replay(handleOf(reopened.modelResult(replayed)));
+  expect(repeated.content).toEqual(original.content);
+  expect(handleOf(reopened.modelResult(repeated))).toBe("r1");
+});
+
+test("replay result associations persist the effective handle after argument hooks", async () => {
+  const f = await fixture();
+  await f.invoke([call("first"), call("second")]);
+  f.control.replayHandle = "r2";
+  const replayed = await f.replay("r1");
+  expect(f.executed.at(-1).text).toBe("second");
+  expect(textOf(replayed)).toBe("second");
+  expect(handleOf(f.modelResult(replayed))).toBe("r2");
+  const source = f.manager.getEntries().find((entry: any) => entry.type === "message" && entry.message.role === "assistant" &&
+    entry.message.content.some((block: any) => block.type === "toolCall" && block.id === replayed.toolCallId));
+  expect(source.message.content[1].arguments.handle).toBe("r1");
+  const reopened = await fixture({ directory: f.directory, manager: SessionManager.open(f.manager.getSessionFile()) });
+  await reopened.invoke([]);
+  expect(handleOf(reopened.modelResult(replayed))).toBe("r2");
+  expect(textOf(await reopened.replay(handleOf(reopened.modelResult(replayed))))).toBe("second");
 });
 
 test("current permission hooks, argument hooks, availability, validation, and cancellation still apply", async () => {
   const f = await fixture();
   const [original] = await f.invoke([call("original")]);
+  const originalHandle = handleOf(f.modelResult(original));
   f.control.block = true;
   const blocked = await f.replay("r1");
   expect(blocked.isError).toBe(true);
   expect(textOf(blocked)).toContain("permission denied");
+  expect(handleOf(f.modelResult(blocked))).toBe(originalHandle);
   expect(f.executed).toHaveLength(1);
   f.control.block = false;
   f.control.mutation = "current hook";
@@ -163,7 +242,7 @@ test("current permission hooks, argument hooks, availability, validation, and ca
   expect(textOf(await f.replay("r1"))).toContain("not callable");
   f.api.setActiveTools(["fixture", "replay_tool"]);
   const reloaded = await fixture({ directory: f.directory, manager: SessionManager.open(f.manager.getSessionFile()), requireExtra: true });
-  const invalid = await reloaded.replay(handleOf(original));
+  const invalid = await reloaded.replay(originalHandle);
   expect(invalid.isError).toBe(true);
   expect(textOf(invalid)).toContain("extra");
   expect(reloaded.executed).toHaveLength(0);
@@ -178,9 +257,10 @@ test("current permission hooks, argument hooks, availability, validation, and ca
 test("durable branch-local handles survive reopen, compaction, and fork; parallel calls never reuse numbers", async () => {
   const f = await fixture();
   const originals = await f.invoke(Array.from({ length: 36 }, (_, index) => call(`call ${index}`)));
-  expect(new Set(originals.map(handleOf)).size).toBe(36);
-  expect(originals.map(handleOf)).toContain("rz");
-  expect(originals.map(handleOf)).toContain("r10");
+  const originalHandles = originals.map(result => handleOf(f.modelResult(result)));
+  expect(new Set(originalHandles).size).toBe(36);
+  expect(originalHandles).toContain("rz");
+  expect(originalHandles).toContain("r10");
   expect(Object.keys(records(f.manager)[0].data).sort()).toEqual(["assistantEntryId", "callIndex", "cwd", "handle", "version"]);
   const keptLeaf = f.manager.getLeafId();
   await f.invoke([call("abandoned")]);
@@ -188,14 +268,19 @@ test("durable branch-local handles survive reopen, compaction, and fork; paralle
   f.manager.branch(keptLeaf);
   await f.session.extensionRunner.emit({ type: "session_tree", newLeafId: keptLeaf, oldLeafId: abandonedLeaf });
   expect((await f.replay("r11")).isError).toBe(true);
-  expect(handleOf((await f.invoke([call("new branch")]))[0])).toBe("r12");
+  const [branched] = await f.invoke([call("new branch")]);
+  expect(handleOf(f.modelResult(branched))).toBe("r12");
   f.manager.appendCompaction("summary", f.manager.getLeafId(), 100);
   const reopened = await fixture({ directory: f.directory, manager: SessionManager.open(f.manager.getSessionFile()) });
-  expect(textOf(await reopened.replay("r1"))).toContain("call 0");
+  const afterCompaction = await reopened.replay("r1");
+  expect(textOf(afterCompaction)).toContain("call 0");
+  expect(handleOf(reopened.modelResult(afterCompaction))).toBe("r1");
   expect((await reopened.replay("r11")).isError).toBe(true);
   const forkFile = reopened.manager.createBranchedSession(reopened.manager.getLeafId());
   const forked = await fixture({ directory: f.directory, manager: SessionManager.open(forkFile) });
-  expect(textOf(await forked.replay("r1"))).toContain("call 0");
+  const afterFork = await forked.replay("r1");
+  expect(textOf(afterFork)).toContain("call 0");
+  expect(handleOf(forked.modelResult(afterFork))).toBe("r1");
   expect((await forked.replay("r11")).isError).toBe(true);
 });
 
@@ -218,5 +303,6 @@ test("rejects malformed, missing, wrong-cwd, off-branch, and recursive sources; 
   const before = f.manager.getEntries().find((entry: any) => entry.type === "message" && entry.message.role === "user").id;
   f.manager.branch(before);
   expect((await f.replay("r1")).isError).toBe(true);
-  expect(handleOf((await f.invoke([call("new source")]))[0])).toBe("r6");
+  const [newSource] = await f.invoke([call("new source")]);
+  expect(handleOf(f.modelResult(newSource))).toBe("r6");
 });
