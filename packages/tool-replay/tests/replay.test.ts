@@ -1,36 +1,16 @@
 import { afterEach, expect, test } from "bun:test";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
+import { findPiHost, resolveHostPackage } from "../../../tests/pi-host.mjs";
 
 // Exercise the installed host, including its loader, validation, hooks, and nested-call accounting.
-let host = process.env.PI_TOOL_REPLAY_HOST;
-if (!host) {
-  const executable = realpathSync(execFileSync("which", ["pi"], { encoding: "utf8" }).trim());
-  let directory = dirname(executable);
-  while (directory !== dirname(directory)) {
-    try {
-      if (JSON.parse(readFileSync(join(directory, "package.json"), "utf8")).name === "@earendil-works/pi-coding-agent") {
-        host = directory;
-        break;
-      }
-    } catch {}
-    directory = dirname(directory);
-  }
-  if (!host) {
-    // Managed installs put a shell launcher on PATH rather than a package-local JS binary.
-    const installRoot = process.env.PI_MANAGED_INSTALL_ROOT ?? join(dirname(executable), "..", "install");
-    const version = readFileSync(join(installRoot, "current-version"), "utf8").trim();
-    if (!/^[0-9A-Za-z][0-9A-Za-z._+-]*$/.test(version)) throw new Error("Invalid managed Pi version");
-    host = realpathSync(join(installRoot, "releases", version, "node_modules/@earendil-works/pi-coding-agent"));
-  }
-}
-if (!host) throw new Error("Install Pi on PATH or set PI_TOOL_REPLAY_HOST to its package directory");
-console.log(`[replay tests] pi-coding-agent@${JSON.parse(readFileSync(join(host, "package.json"), "utf8")).version} (${host})`);
-const { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } = await import(join(host, "dist/index.js"));
-const { createAssistantMessageEventStream } = await import(Bun.resolveSync("@earendil-works/pi-ai", host));
-const { Type } = await import(Bun.resolveSync("typebox", host));
+const host = findPiHost("PI_TOOL_REPLAY_HOST");
+const hostPackage = resolveHostPackage(host, "@earendil-works/pi-coding-agent");
+console.log(`[replay tests] pi-coding-agent@${hostPackage.manifest.version} (${host})`);
+const { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } = await import(hostPackage.entry!);
+const { createAssistantMessageEventStream } = await import(resolveHostPackage(host, "@earendil-works/pi-ai").entry!);
+const { Type } = await import(resolveHostPackage(host, "typebox").entry!);
 const packagePath = resolve(import.meta.dir, "..");
 const zeroUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
 const toolUsage = { ...zeroUsage, input: 7, totalTokens: 7 };

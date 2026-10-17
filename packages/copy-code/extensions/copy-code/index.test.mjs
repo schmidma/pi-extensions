@@ -1,22 +1,20 @@
 import assert from "node:assert/strict";
-import { existsSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
-import { delimiter, dirname, join } from "node:path";
+import { join } from "node:path";
 import test from "node:test";
+import { findPiHost, resolveHostPackage } from "../../../../tests/pi-host.mjs";
 
 // Resolve the installed host from PATH, just as Pi does for extension imports.
-const executable = process.env.PATH.split(delimiter).map((dir) => join(dir, "pi")).find(existsSync);
-assert.ok(executable, "Pi must be installed on PATH");
-const hostCli = realpathSync(executable);
-const hostRequire = createRequire(hostCli);
-const hostEntry = [join(dirname(hostCli), "index.js"), join(dirname(hostCli), "..", "index.js")].find(existsSync);
-assert.ok(hostEntry, "Pi's public dist/index.js must be installed");
+const host = findPiHost("PI_COPY_CODE_HOST");
+const hostPackage = resolveHostPackage(host, "@earendil-works/pi-coding-agent");
+const hostRequire = createRequire(join(host, "package.json"));
+console.log(`[copy-code tests] pi-coding-agent@${hostPackage.manifest.version} (${host})`);
 const { createJiti } = hostRequire("jiti");
 const jiti = createJiti(import.meta.url, {
 	fsCache: false,
 	alias: {
-		"@earendil-works/pi-coding-agent": hostEntry,
-		"@earendil-works/pi-tui": hostRequire.resolve("@earendil-works/pi-tui"),
+		"@earendil-works/pi-coding-agent": hostPackage.entry,
+		"@earendil-works/pi-tui": resolveHostPackage(host, "@earendil-works/pi-tui").entry,
 	},
 });
 const { default: register, extractCodeBlocks, collectCodeChoices, choiceLabel, copyCode } = await jiti.import("./index.ts");

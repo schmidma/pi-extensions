@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createBashToolDefinition, createEditToolDefinition, createWriteToolDefinition, discoverAndLoadExtensions, initTheme, ToolExecutionComponent, type Theme, type ToolRenderers } from "@earendil-works/pi-coding-agent";
+import { createBashToolDefinition, createEditToolDefinition, createWriteToolDefinition, discoverAndLoadExtensions, initTheme, ToolExecutionComponent, type Theme, type ToolRenderContext, type ToolRenderers } from "@earendil-works/pi-coding-agent";
 import { Text, visibleWidth, type TUI } from "@earendil-works/pi-tui";
 import { decorate } from "../../terminal-ui/extensions/tool-lifecycle/index.ts";
 import { Lifecycle } from "../../terminal-ui/extensions/tool-lifecycle/lifecycle.ts";
@@ -13,11 +13,12 @@ beforeAll(() => initTheme("dark", false));
 const theme = { fg: (_: string, text: string) => text, bg: (_: string, text: string) => text, bold: (text: string) => text } as Theme;
 const strip = (text: string) => text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
 const ui = { requestRender() {} } as TUI;
-const context = (id: string, extra = {}) => ({ args: {}, toolCallId: id, state: {}, invalidate() {}, lastComponent: undefined,
-  cwd: "/tmp", executionStarted: false, argsComplete: false, isPartial: true, expanded: false, showImages: false, isError: false, ...extra });
+const context = (id: string, extra: Partial<ToolRenderContext> = {}): ToolRenderContext => ({ args: {}, toolCallId: id, state: {}, invalidate() {}, lastComponent: undefined,
+  cwd: "/tmp", executionStarted: false, argsComplete: false, isPartial: true, expanded: false, showImages: false, isError: false,
+  durationMs: undefined, outputPad: 1, ...extra });
 
-function component(name: string, id: string, args: any, renderers: ToolRenderers | undefined) {
-  return new ToolExecutionComponent(name, id, args, { showImages: false }, renderers, ui, "/tmp");
+function component(name: string, id: string, args: any, renderers: ToolRenderers | undefined, outputPad = 1) {
+  return new ToolExecutionComponent(name, id, args, { showImages: false, outputPad }, renderers, ui, "/tmp");
 }
 
 test("installed Pi loads the lifecycle extension as rendering-only", async () => {
@@ -46,7 +47,7 @@ test("built-in shared renderer state and lastComponent reuse survive call decora
   life.stop();
 });
 
-test("native self-framed edit keeps padding, live preview and result shared state with one heading marker", async () => {
+test.each([0, 1])("native self-framed edit keeps configured padding (%i), live preview and result shared state with one heading marker", async (outputPad) => {
   const directory = mkdtempSync(join(tmpdir(), "pi-edit-marker-"));
   const life = new Lifecycle();
   try {
@@ -59,15 +60,15 @@ test("native self-framed edit keeps padding, live preview and result shared stat
     let nativePreviewReady!: () => void, markedPreviewReady!: () => void;
     const nativeReady = new Promise<void>(resolve => { nativePreviewReady = resolve; });
     const markedReady = new Promise<void>(resolve => { markedPreviewReady = resolve; });
-    const nativeCtx = context("plain-edit", { args, invalidate: () => nativePreviewReady() });
-    const markedCtx = context("edit", { args, invalidate: () => markedPreviewReady() });
+    const nativeCtx = context("plain-edit", { args, outputPad, invalidate: () => nativePreviewReady() });
+    const markedCtx = context("edit", { args, outputPad, invalidate: () => markedPreviewReady() });
     life.set("edit", "composing");
     let nativeCall = native.renderCall!(args, theme, nativeCtx);
     let markedCall = marked.renderCall!(args, theme, markedCtx);
     const sameContent = (glyph: string) => {
       const lines = markedCall.render(120).map(strip);
       expect(lines.filter(line => line.includes(`${glyph} edit `))).toHaveLength(1);
-      expect(lines.find(line => line.includes(`${glyph} edit `))).toStartWith(` ${glyph} edit `);
+      expect(lines.find(line => line.includes(`${glyph} edit `))).toStartWith(`${" ".repeat(outputPad)}${glyph} edit `);
       expect(lines.map(line => line.replace(`${glyph} `, "").trimEnd()))
         .toEqual(nativeCall.render(120).map(line => strip(line).trimEnd()));
     };
@@ -96,8 +97,8 @@ test("native self-framed edit keeps padding, live preview and result shared stat
     expect(strip(markedCall.render(120).join("\n"))).toContain("final text");
     expect(strip(markedCall.render(120).join("\n"))).not.toContain("new text");
     expect((markedCtx.state as any).callComponent).toBe(markedCall);
-    const nativeRow = component("edit", "plain-row", args, native);
-    const markedRow = component("edit", "edit", args, marked);
+    const nativeRow = component("edit", "plain-row", args, native, outputPad);
+    const markedRow = component("edit", "edit", args, marked, outputPad);
     nativeRow.updateResult({ ...result, isError: false }); markedRow.updateResult({ ...result, isError: false });
     for (const expanded of [false, true]) {
       nativeRow.setExpanded(expanded); markedRow.setExpanded(expanded);
