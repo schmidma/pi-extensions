@@ -1,5 +1,7 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ToolResultMessage } from "@earendil-works/pi-ai";
+import { SessionManager, type ContextUsage, type FileEntry } from "@earendil-works/pi-coding-agent";
+import { projectedContextUsage } from "./context-usage.ts";
 import type {
   AgentSession, ExtensionAPI, ExtensionContext, MessageStartEvent, MessageUpdateEvent, MessageEndEvent,
   ToolExecutionStartEvent, ToolExecutionUpdateEvent, ToolExecutionEndEvent, ToolRenderers, MessageRenderer,
@@ -30,6 +32,7 @@ export type TranscriptUpdate =
 
 /** Snapshot and subscribe must be synchronous: no await between them at the consumer. */
 export interface TranscriptSource {
+  getContextUsage?(): ContextUsage | undefined;
   snapshot(): TranscriptSnapshot;
   subscribe(listener: (update: TranscriptUpdate) => void): () => void;
   /** Resolve the owning child session's renderers when it is live. */
@@ -53,7 +56,18 @@ export class CurrentSessionSource implements TranscriptSource {
   private unsubscribe: (() => void)[] = [];
   private disposed = false;
 
-  constructor(private context: () => Pick<ExtensionContext, "sessionManager">) {}
+  private contextCache?: { manager: ExtensionContext["sessionManager"]; sessionId: string; leafId: string | null; model: unknown; window: number | undefined; value: ContextUsage | undefined };
+  constructor(private context: () => Pick<ExtensionContext, "sessionManager"> & Partial<Pick<ExtensionContext, "getContextUsage" | "model">>) {}
+
+  getContextUsage(): ContextUsage | undefined {
+    const context = this.context(), manager = context.sessionManager;
+    const sessionId = manager.getSessionId(), leafId = manager.getLeafId(), model = context.model, window = model?.contextWindow;
+    const cached = this.contextCache;
+    if (cached && cached.manager === manager && cached.sessionId === sessionId && cached.leafId === leafId && cached.model === model && cached.window === window) return cached.value;
+    const value = context.getContextUsage?.();
+    this.contextCache = { manager, sessionId, leafId, model, window, value };
+    return value;
+  }
 
   private prunePersisted(): void {
     if (![...this.pending.values()].some(value => !value.streaming)) return;
@@ -156,6 +170,7 @@ export class CurrentSessionSource implements TranscriptSource {
   }
 
   reset(): void {
+    this.contextCache = undefined;
     this.pendingLeaf.clear();
     this.reconciledEntries.clear();
     this.pending.clear();
@@ -184,6 +199,7 @@ export class CurrentSessionSource implements TranscriptSource {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.contextCache = undefined;
     for (const unsubscribe of this.unsubscribe) unsubscribe();
     this.unsubscribe = [];
     this.listeners.clear();
@@ -197,6 +213,18 @@ export class CurrentSessionSource implements TranscriptSource {
 /** Native SDK events and projection; no model run or context mutation is needed to inspect. */
 export class AgentSessionSource extends CurrentSessionSource {
   private unbind: () => void;
+  private usageCache?: { sessionId: string; leafId: string | null; count: number; model: unknown; window: number | undefined; value: ContextUsage | undefined };
+  override getContextUsage(): ContextUsage | undefined {
+    const manager = this.session.sessionManager;
+    const sessionId = manager.getSessionId(), leafId = manager.getLeafId(), count = manager.getEntryCount();
+    const model = this.session.routedModel?.model ?? this.session.model;
+    const window = model?.contextWindow;
+    const cached = this.usageCache;
+    if (cached && cached.sessionId === sessionId && cached.leafId === leafId && cached.count === count && cached.model === model && cached.window === window) return cached.value;
+    const value = this.session.getContextUsage();
+    this.usageCache = { sessionId, leafId, count, model, window, value };
+    return value;
+  }
   constructor(private session: AgentSession) {
     super(() => ({ sessionManager: session.sessionManager }));
     this.unbind = session.subscribe(event => {
@@ -204,7 +232,7 @@ export class AgentSessionSource extends CurrentSessionSource {
         case "message_start": case "message_update": case "message_end":
         case "tool_execution_start": case "tool_execution_update": case "tool_execution_end":
           this.accept(event); break;
-        case "turn_end": case "agent_end": case "agent_settled":
+        case "turn_end": case "agent_end": case "agent_settled": case "compaction_end": case "entry_appended":
           this.reconcileBoundary(); break;
       }
     });
@@ -215,5 +243,20 @@ export class AgentSessionSource extends CurrentSessionSource {
   resolveMessageRenderer(type: string): MessageRenderer | undefined {
     return this.session.extensionRunner.getMessageRenderer(type);
   }
-  override dispose(): void { this.unbind(); super.dispose(); }
+  override dispose(): void { this.unbind(); this.usageCache = undefined; super.dispose(); }
+}
+
+/** Parses no files and opens no execution runtime. Projection is shared by rows and usage. */
+export class ColdSessionSource implements TranscriptSource {
+  private readonly value: TranscriptSnapshot;
+  private readonly usage: ContextUsage | undefined;
+  constructor(cwd: string, entries: FileEntry[], contextWindow: number | undefined) {
+    const manager = SessionManager.inMemory(cwd, undefined, entries);
+    const projection = manager.buildSessionProjection();
+    this.value = { messages: projection.entries.flatMap(entry => entry.messages.map((message, i) => ({ id: `${entry.sourceEntry.id}:${i}`, message: clone(message) }))), tools: [] };
+    this.usage = projectedContextUsage(projection, manager.getBranch(), contextWindow);
+  }
+  snapshot(): TranscriptSnapshot { return clone(this.value); }
+  getContextUsage(): ContextUsage | undefined { return this.usage; }
+  subscribe(_listener: (update: TranscriptUpdate) => void): () => void { return () => {}; }
 }

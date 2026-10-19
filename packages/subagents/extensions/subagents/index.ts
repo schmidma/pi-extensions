@@ -1,10 +1,10 @@
-import { getAgentDir, SessionManager, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Coordinator, processServices, shutdownLegacyService } from "./coordinator.ts";
 import { SubagentStore, readChildEntries, rootIdentity } from "./store.ts";
 import { NativeChildFactory } from "./runner.ts";
 import { exactModel, loadRoles, ModelConfiguration } from "./configuration.ts";
 import { bridgeContext, registerBridge } from "./bridge.ts";
-import { CurrentSessionSource } from "./source.ts";
+import { ColdSessionSource, CurrentSessionSource } from "./source.ts";
 import { TranscriptInspector } from "./inspector.ts";
 import { subagentLabel } from "./state.ts";
 import { OverviewAttachment } from "./overview.ts";
@@ -170,7 +170,7 @@ export default function subagents(pi: ExtensionAPI): void {
     let closeView: (() => void) | undefined;
     const cancel = () => { cancelled = true; closeView?.(); };
     close = cancel;
-    let cold: CurrentSessionSource | undefined;
+    let cold: ColdSessionSource | undefined;
     try {
       const current = processServices().get(rootIdentity(ctx.sessionManager)) ?? (await attach(ctx)).service;
       if (cancelled || active !== generation) return;
@@ -178,9 +178,7 @@ export default function subagents(pi: ExtensionAPI): void {
       if (!record) throw new Error(`Unknown subagent ${id}`);
       const live = current.runtime(id);
       if (!live) {
-        readChildEntries(record);
-        const manager = SessionManager.open(record.sessionFile);
-        cold = new CurrentSessionSource(() => ({ sessionManager: manager }));
+        cold = current.createColdSource?.(id) ?? new ColdSessionSource(record.cwd, readChildEntries(record), undefined);
       }
       // Direct-ID commands always return to the prompt, even if invoked from tree focus.
       if (!returnToTree) overview.returnToEditor();
@@ -198,7 +196,7 @@ export default function subagents(pi: ExtensionAPI): void {
         return view;
       }, { overlay: true, overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%", margin: 0 } });
     } finally {
-      closeView?.(); cold?.dispose();
+      closeView?.();
       if (close === cancel) close = undefined;
       if (!cancelled && active === generation) {
         if (returnToTree) overview.focus(); else overview.returnToEditor();

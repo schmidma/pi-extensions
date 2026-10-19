@@ -4,6 +4,7 @@ import { Key, Loader, matchesKey, SelectList, stripTerminalSequences, truncateTo
 import { decorateTreeEditor, type TreeCompatibleEditor } from "./tree-editor.ts";
 import { agentTree, type TreeNode, type TreeSource } from "./tree.ts";
 import { relevantTree } from "./relevance.ts";
+import { formatContextUsage, readContextUsage } from "./context-usage.ts";
 import { metadataText, runElapsed, shortId, statusColor, statusMark } from "./presentation.ts";
 
 const MAX_INDENT = 3;
@@ -137,9 +138,10 @@ export class SubagentOverview implements Component {
     this.ui.requestRender();
   }
   private window(capacity: number): { nodes: TreeNode[]; start: number; end: number; above: number; below: number } {
-    const anchor = this.focused || this.mode === "All" ? this.selectedId : this.passiveAnchor()?.record.id;
-    const index = Math.max(0, this.nodes.findIndex(node => node.record.id === anchor));
-    const start = Math.max(0, Math.min(index - Math.floor(capacity / 2), this.nodes.length - capacity));
+    const maxStart = Math.max(0, this.nodes.length - capacity);
+    const anchor = this.focused ? this.selectedId : undefined;
+    const index = anchor ? Math.max(0, this.nodes.findIndex(node => node.record.id === anchor)) : 0;
+    const start = this.focused ? Math.max(0, Math.min(index - Math.floor(capacity / 2), maxStart)) : maxStart;
     const end = Math.min(this.nodes.length, start + capacity);
     return { nodes: this.nodes.slice(start, end), start, end, above: start, below: this.nodes.length - end };
   }
@@ -154,9 +156,11 @@ export class SubagentOverview implements Component {
     const { record, status, run } = this.nodes[index];
     const marker = this.theme.fg(statusColor(status), status === "running" ? this.marker : statusMark[status]);
     const diagnostic = status === "running" || status === "finished" ? "" : ` · ${this.theme.fg(statusColor(status), status)}`;
-    const suffix = `${diagnostic} · ${index + 1}/${this.nodes.length}${this.mode === "All" ? " · [All]" : ""}`;
+    const navigation = ` · ${index + 1}/${this.nodes.length}${this.mode === "All" ? " · [All]" : ""}`;
     const identity = width >= 48 ? this.theme.fg("dim", ` [${shortId(record.id)}]`) : "";
     const prefix = `› ${marker} `;
+    const usage = this.theme.fg("dim", ` · ${formatContextUsage(readContextUsage(this.source, record.id))}`);
+    const suffix = diagnostic + (visibleWidth(prefix + identity + diagnostic + usage + navigation) < width ? usage : "") + navigation;
     const nameBudget = Math.max(1, width - visibleWidth(prefix + identity + suffix));
     let selected = prefix + this.theme.fg("text", truncateToWidth(metadataText(record.name), nameBudget)) + identity + suffix;
     const elapsed = runElapsed(run, this.now());
@@ -200,10 +204,11 @@ export class SubagentOverview implements Component {
       const nesting = depth > indentLimit && width >= 24 ? this.theme.fg("dim", ` · depth ${depth + 1}`) : "";
       const marker = this.theme.fg(statusColor(status), status === "running" ? this.marker : statusMark[status]);
       const diagnostic = status === "running" || status === "finished" ? "" : ` · ${this.theme.fg(statusColor(status), status)}`;
-      const suffix = diagnostic + context + nesting;
       const identity = width >= 48 ? this.theme.fg("dim", ` [${shortId(record.id)}]`) : "";
       const prefix = `${indent}${branch}${marker} `;
-      // Keep identity and exceptional states ahead of optional model metadata.
+      const usage = this.theme.fg("dim", ` · ${formatContextUsage(readContextUsage(this.source, record.id))}`);
+      const suffix = diagnostic + (visibleWidth(prefix + identity + diagnostic + usage) < width ? usage : "") + context + nesting;
+      // Keep identity, exceptional states and context usage ahead of optional model metadata.
       const nameBudget = Math.max(1, width - visibleWidth(prefix + identity + suffix));
       const name = truncateToWidth(metadataText(record.name), nameBudget);
       let line = prefix + this.theme.fg("text", name) + identity;

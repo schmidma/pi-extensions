@@ -35,8 +35,8 @@ test("contiguous directional windows have exact top/middle/bottom counts, no hid
   const f = fixture();
   try {
     const passive = f.view.render(180);
-    expect(ids(passive)).toEqual(["id-0", "id-1", "id-2", "id-3", "id-4", "id-5"]);
-    expect(passive.at(-1)).toBe("↓ 14 below");
+    expect(ids(passive)).toEqual(["id-14", "id-15", "id-16", "id-17", "id-18", "id-19"]);
+    expect(passive.at(-1)).toBe("↑ 14 above");
     f.view.focused = true;
     expect(f.view.render(180)).toHaveLength(passive.length);
     f.view.handleInput("\x1b[6~");
@@ -53,11 +53,16 @@ test("contiguous directional windows have exact top/middle/bottom counts, no hid
       expect(lines.some(line => line.startsWith("› ") && line.includes("[id-19]"))).toBe(true);
       expect(lines.every(line => visibleWidth(line) <= 80)).toBe(true);
       expect(lines.join("\n")).not.toMatch(/more|Up\/Down|Enter inspect|\/subagents|finished/);
+      f.view.focused = false;
+      const inactive = f.view.render(80);
+      expect(ids(inactive).at(-1)).toBe("id-19");
+      expect(inactive.join("\n")).not.toContain("below");
+      f.view.focused = true;
     }
   } finally { f.view.dispose(); }
 });
 
-test("passive anchor prefers running over earlier waiting and deduplicates deep contiguous context", () => {
+test("inactive viewport stays at the bottom regardless of status anchors and follows appended rows", () => {
   const f = fixture(20);
   try {
     for (let i = 1; i < 20; i++) f.state.subagents[`id-${i}`].parentId = `id-${i - 1}`;
@@ -71,14 +76,20 @@ test("passive anchor prefers running over earlier waiting and deduplicates deep 
     expect(f.view.getSelectedAgentId()).toBe("id-18");
     expect(lines.join("\n")).toContain("depth 19");
     expect(agentTree(f.state)).toHaveLength(20);
+    const appended: SubagentRecord = { ...f.state.subagents["id-19"], id: "id-20", name: "Name 20", parentId: "root", currentRun: "run-20" };
+    f.state.subagents[appended.id] = appended;
+    f.state.runs["run-20"] = { ...f.state.runs["run-19"], id: "run-20", agentId: appended.id };
+    f.change();
+    expect(ids(f.view.render(180))).toEqual(["id-15", "id-16", "id-17", "id-18", "id-19", "id-20"]);
     f.state.runs["run-18"].phase = "terminal"; f.change();
     lines = f.view.render(180);
-    expect(ids(lines)[0]).toBe("id-0"); expect(f.view.getSelectedAgentId()).toBe("id-0");
+    expect(ids(lines)).toEqual(["id-15", "id-16", "id-17", "id-18", "id-19", "id-20"]);
+    expect(f.view.getSelectedAgentId()).toBe("id-0");
     f.state.runs["run-0"].phase = "terminal"; f.change();
     f.view.setAcknowledgedRuns(new Set(Object.keys(f.state.runs)));
     const recent = { ...f.state.runs["run-19"], id: "recent", generation: 2, startedAt: new Date(70000).toISOString(), endedAt: new Date(75000).toISOString() };
     f.state.runs.recent = recent; f.state.subagents["id-19"].currentRun = recent.id; f.change();
-    expect(f.view.getSelectedAgentId()).toBe("id-19"); // acknowledged ancestors are context, not default selection
+    expect(f.view.getSelectedAgentId()).toBe("id-19"); // acknowledged ancestors remain context, not default selection
     expect(ids(f.view.render(180)).at(-1)).toBe("id-19");
   } finally { f.view.dispose(); }
 });
@@ -86,13 +97,16 @@ test("passive anchor prefers running over earlier waiting and deduplicates deep 
 test("explicit exits reset Relevant selection but temporary overlay blur preserves All and selected ID", () => {
   const f = fixture();
   try {
-    f.view.focused = true; f.view.handleInput("\t"); f.view.handleInput("\x1b[F");
-    f.view.focused = false; f.change(); f.view.focused = true;
-    expect(f.view.getMode()).toBe("All"); expect(f.view.getSelectedAgentId()).toBe("id-19");
+    f.view.focused = true; f.view.handleInput("\t"); f.view.handleInput("\x1b[B");
+    f.view.focused = false; f.change();
+    expect(ids(f.view.render(180))).toEqual(["id-14", "id-15", "id-16", "id-17", "id-18", "id-19"]);
+    f.view.focused = true;
+    expect(f.view.getMode()).toBe("All"); expect(f.view.getSelectedAgentId()).toBe("id-1");
+    expect(ids(f.view.render(180))).toEqual(["id-0", "id-1", "id-2", "id-3", "id-4", "id-5"]);
     for (const key of ["\x1b", "\x1b[D", "typed"]) {
       f.view.handleInput(key);
       expect(f.view.focused).toBe(false); expect(f.view.getMode()).toBe("Relevant"); expect(f.view.getSelectedAgentId()).toBe("id-0");
-      expect(f.view.render(180).at(-1)).toBe("↓ 14 below");
+      expect(ids(f.view.render(180))).toEqual(["id-14", "id-15", "id-16", "id-17", "id-18", "id-19"]);
       f.view.focused = true;
       expect(f.view.getSelectedAgentId()).toBe("id-0");
       f.view.handleInput("\t"); f.view.handleInput("\x1b[F");
@@ -114,15 +128,15 @@ test("one owned clock ticks waiting, shares Loader while running, freezes termin
     f = fixture(2); expect(intervals.size).toBe(0);
     f.state.runs["run-0"].phase = "waiting"; f.change();
     expect([...intervals.values()].map(timer => timer.delay)).toEqual([1000]); expect(start).not.toHaveBeenCalled();
-    expect(f.view.render(180).join("\n")).toContain("· waiting · 64.0s");
+    expect(f.view.render(180).join("\n")).toContain("· waiting · ?% · 64.0s");
     const previous = f.renders(); f.advance(1000); intervals.values().next().value!.callback();
     expect(f.renders()).toBe(previous + 1);
-    expect(f.view.render(180).join("\n")).toContain("· waiting · 65.0s");
+    expect(f.view.render(180).join("\n")).toContain("· waiting · ?% · 65.0s");
     f.change(); expect(intervals.size).toBe(1); // state updates never create a second timer
     f.state.runs["run-1"].phase = "running"; f.change();
     expect([...intervals.values()].map(timer => timer.delay)).toEqual([80]); expect(start).toHaveBeenCalledTimes(1);
     f.advance(1000); intervals.values().next().value!.callback();
-    expect(f.view.render(180).join("\n")).toContain("· waiting · 66.0s");
+    expect(f.view.render(180).join("\n")).toContain("· waiting · ?% · 66.0s");
     f.state.runs["run-1"].phase = "waiting"; f.change();
     expect([...intervals.values()].map(timer => timer.delay)).toEqual([1000]);
     for (const run of Object.values(f.state.runs)) { run.phase = "terminal"; run.endedAt = new Date(68000).toISOString(); }
@@ -130,12 +144,12 @@ test("one owned clock ticks waiting, shares Loader while running, freezes termin
     const frozen = f.view.render(180); f.advance(3600000); expect(f.view.render(180)).toEqual(frozen);
     const next = { ...f.state.runs["run-0"], id: "resumed", generation: 2, phase: "waiting" as const, startedAt: new Date(3660000).toISOString(), endedAt: undefined };
     f.state.runs.resumed = next; f.state.subagents["id-0"].currentRun = next.id; f.change();
-    expect(f.view.render(180).join("\n")).toContain("· waiting · 7.0s"); expect(intervals.size).toBe(1);
+    expect(f.view.render(180).join("\n")).toContain("· waiting · ?% · 7.0s"); expect(intervals.size).toBe(1);
     expect(agentTree(f.state)[0].run?.id).toBe(next.id);
     f.view.focused = true; f.view.handleInput("\t");
     f.advance(1000);
     const all = f.view.render(180).join("\n");
-    expect(all).toContain("· waiting · 8.0s"); expect(all).toContain("· 67.0s");
+    expect(all).toContain("· waiting · ?% · 8.0s"); expect(all).toContain("· 67.0s");
     const stale = intervals.values().next().value!.callback;
     f.view.dispose(); f.view.dispose(); expect(intervals.size).toBe(0); expect(f.listeners.size).toBe(0);
     const count = f.renders(); f.change(); stale(); expect(f.renders()).toBe(count);

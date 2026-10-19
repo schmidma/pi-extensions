@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { closeSync, fsyncSync, openSync, readFileSync } from "node:fs";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { SubagentStore } from "./store.ts";
+import { SubagentStore, readChildEntries } from "./store.ts";
+import type { ContextUsage } from "@earendil-works/pi-coding-agent";
+import { ColdSessionSource } from "./source.ts";
+import { readContextUsage } from "./context-usage.ts";
 import type { ChildHooks, ChildRuntime, ChildRuntimeFactory } from "./runner.ts";
 import { REPORT_TYPE, obligations, subagentLabel, validateName, type RunRecord, type Outcome, type SubagentRecord, type SubagentState } from "./state.ts";
 import { Mailbox, reportDraft, type ParentBinding } from "./delivery.ts";
@@ -15,12 +18,14 @@ interface LiveChild {
   configurationKey?: object;
   preparing?: Promise<ChildRuntime>;
   running?: Promise<void>;
+  unsubscribeSource?: () => void;
   guidance: string[];
   stopping: boolean;
 }
 export type NewSubagent = Omit<SubagentRecord, "id" | "parentId" | "sessionId" | "sessionFile" | "generation" | "currentRun">;
 export class Coordinator {
   private live = new Map<string, LiveChild>();
+  private cold = new Map<string, { key: string; usage: ContextUsage | undefined }>();
   private mailboxes = new Map<string, Mailbox>();
   private listeners = new Set<() => void>();
   private stopping = false;
@@ -61,10 +66,44 @@ export class Coordinator {
   attach(binding: ParentBinding, factory: ChildRuntimeFactory): void {
     if (this.stopping) throw new Error("Subagent group is shutting down");
     if (this.fault) throw this.fault;
-    this.factory = factory;
+    this.updateFactory(factory);
     this.mailbox().attach(binding);
   }
-  updateFactory(factory: ChildRuntimeFactory): void { this.factory = factory; }
+  updateFactory(factory: ChildRuntimeFactory): void {
+    if (this.factory.configurationKey !== factory.configurationKey) this.cold.clear();
+    this.factory = factory;
+  }
+  private coldMetadata(id: string) {
+    const record = this.store.state.subagents[id];
+    if (!record?.sessionFile) return undefined;
+    const window = this.factory.models?.find(({ model }) => `${model.provider}/${model.id}` === record.model)?.model.contextWindow;
+    const key = JSON.stringify([record.sessionId, record.sessionFile, record.generation, window]);
+    return { record, window, key };
+  }
+  /** Fresh, viewer-owned transcript; retain only its small usage result in the service. */
+  createColdSource(id: string): ColdSessionSource | undefined {
+    const metadata = this.coldMetadata(id);
+    if (!metadata) return undefined;
+    const { record, window, key } = metadata;
+    try {
+      const source = new ColdSessionSource(record.cwd, readChildEntries(record), window);
+      this.cold.set(id, { key, usage: readContextUsage(source) });
+      return source;
+    } catch (error) {
+      this.cold.set(id, { key, usage: undefined });
+      throw error;
+    }
+  }
+  /** Lazy metadata cache; spinner frames retain no transcripts and do no projection/file work. */
+  getContextUsage(id: string): ContextUsage | undefined {
+    const runtime = this.runtime(id);
+    if (runtime) return readContextUsage(runtime.source);
+    const metadata = this.coldMetadata(id);
+    if (!metadata) return undefined;
+    const cached = this.cold.get(id);
+    if (cached?.key === metadata.key) return cached.usage;
+    try { return readContextUsage(this.createColdSource(id) ?? {}); } catch { return undefined; }
+  }
   detach(): void { this.mailbox().detach(); }
   afterCompaction(): void { if (!this.fault) this.mailbox().afterCompaction(); }
   get records(): SubagentRecord[] { return Object.values(this.store.state.subagents); }
@@ -201,7 +240,9 @@ export class Coordinator {
     let live = this.live.get(subagent.id);
     if (!live) { live = { stopping: false, guidance: [] }; this.live.set(subagent.id, live); }
     try {
+      this.cold.delete(subagent.id);
       if (!live.runtime || live.configurationKey !== factory.configurationKey) {
+        live.unsubscribeSource?.(); live.unsubscribeSource = undefined;
         const stale = live.runtime;
         live.runtime = undefined;
         live.configurationKey = factory.configurationKey;
@@ -213,6 +254,9 @@ export class Coordinator {
         })();
         live.runtime = await live.preparing;
         live.preparing = undefined;
+        // Only committed/reset boundaries need to refresh the tree; streamed deltas
+        // already have a spinner and contain no authoritative context usage.
+        live.unsubscribeSource = live.runtime.source.subscribe(update => { if (update.type === "reset") this.changed(); });
         if (live.runtime.binding) this.mailbox(subagent.id).attach(live.runtime.binding);
       }
       // A prior run may have published its terminal marker just before its cycle's finally.
@@ -304,9 +348,14 @@ export class Coordinator {
     const cleanups: Promise<void>[] = [];
     for (const [id, live] of this.live) {
       if (live.preparing || live.running || this.store.state.subagents[id].currentRun || !live.runtime?.idle) continue;
+      live.unsubscribeSource?.();
       this.live.delete(id);
+      this.cold.delete(id);
+      this.changed();
       this.mailbox(id).detach();
-      const cleanup = Promise.resolve().then(() => live.runtime!.shutdown());
+      const cleanup = Promise.resolve().then(() => live.runtime!.shutdown()).finally(() => {
+        this.cold.delete(id); this.changed();
+      });
       // A concurrent root shutdown still owns these runtimes until cleanup settles.
       this.releasing.add(cleanup);
       void cleanup.then(() => this.releasing.delete(cleanup), () => this.releasing.delete(cleanup));
@@ -341,7 +390,9 @@ export class Coordinator {
         } catch (error) { errors.push(error); }
       }
     } finally {
+      for (const live of this.live.values()) live.unsubscribeSource?.();
       this.live.clear();
+      this.cold.clear();
       this.mailboxes.clear();
       try { this.store.close(); } catch (error) { errors.push(error); }
       this.changed();

@@ -512,14 +512,14 @@ test("menu rows lead with activity icons and keep dim IDs next to names before m
   const component = new SubagentOverview(new Fixture(snapshot), ui, themed, undefined, () => 3000);
   try {
     const raw = component.render(160), lines = raw.map(strip);
-    expect(lines).toContain("  ✓ Finished task [done] · fixture/model · thinking: low · 1.0s");
-    expect(lines.some(line => /^  [\u2800-\u28ff] Running task \[runner\] · fixture\/model · thinking: low · 2\.0s$/.test(line))).toBe(true);
-    expect(lines).toContain("  ◷ Waiting task [wait] · fixture/model · thinking: low · waiting · 2.0s");
-    expect(lines).toContain("  ✗ Failed task [error] · fixture/model · thinking: low · error · 1.0s");
+    expect(lines).toContain("  ✓ Finished task [done] · fixture/model · thinking: low · ?% · 1.0s");
+    expect(lines.some(line => /^  [\u2800-\u28ff] Running task \[runner\] · fixture\/model · thinking: low · \?% · 2\.0s$/.test(line))).toBe(true);
+    expect(lines).toContain("  ◷ Waiting task [wait] · fixture/model · thinking: low · waiting · ?% · 2.0s");
+    expect(lines).toContain("  ✗ Failed task [error] · fixture/model · thinking: low · error · ?% · 1.0s");
     expect(raw.find(line => strip(line).includes("✓ Finished task"))).toContain("\x1b[2m [done]\x1b[22m");
     component.focused = true; ui.terminal.rows = 7;
     const compact = strip(component.render(160)[0]);
-    expect(compact).toMatch(/^› [\u2800-\u28ff] Running task \[runner\] · 2\/4 · 2\.0s$/);
+    expect(compact).toMatch(/^› [\u2800-\u28ff] Running task \[runner\] · \?% · 2\/4 · 2\.0s$/);
     expect(compact).not.toContain("Relevant");
     expect(compact).not.toContain("· running");
   } finally { component.dispose(); }

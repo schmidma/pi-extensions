@@ -1,8 +1,10 @@
+import type { ContextUsage } from "@earendil-works/pi-coding-agent";
 import type { RunRecord, SubagentRecord, SubagentState } from "./state.ts";
 
 export type DisplayStatus = "running" | "waiting" | "finished" | "error" | "aborted" | "interrupted";
 export interface TreeNode { record: SubagentRecord; depth: number; status: DisplayStatus; run?: Readonly<RunRecord> }
 export interface TreeSource {
+  getContextUsage?(id: string): ContextUsage | undefined;
   snapshot(): SubagentState;
   subscribe(listener: () => void): () => void;
 }

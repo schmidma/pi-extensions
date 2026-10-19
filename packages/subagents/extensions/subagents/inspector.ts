@@ -2,9 +2,10 @@ import {
   AssistantMessageComponent, ToolExecutionComponent,
   type KeybindingsManager, type Theme,
 } from "@earendil-works/pi-coding-agent";
-import { matchesKey, truncateToWidth, type Component, type TUI } from "@earendil-works/pi-tui";
+import { matchesKey, truncateToWidth, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 import { builtInRenderers, nativeMessage, nativeTool, safeTextLines } from "./native.ts";
 import { delegationRenderers, reportRenderer, type RecordLookup, type RunLookup } from "./cards.ts";
+import { formatContextUsage, readContextUsage } from "./context-usage.ts";
 import { REPORT_TYPE } from "./state.ts";
 import type { TranscriptMessage, TranscriptSnapshot, TranscriptSource, TranscriptTool, TranscriptUpdate } from "./source.ts";
 
@@ -160,8 +161,11 @@ export class TranscriptInspector implements Component {
     const content = this.renderRows(Math.max(1, width));
     this.maxOffset = Math.max(0, content.length - this.viewportHeight);
     this.offset = this.following ? this.maxOffset : Math.min(this.offset, this.maxOffset);
-    const title = this.theme.fg("accent", this.title);
-    const lines = [truncateToWidth(title, width)];
+    const usage = this.theme.fg("dim", formatContextUsage(readContextUsage(this.source)));
+    const suffix = ` · ${usage}`;
+    const titleBudget = width - visibleWidth(suffix);
+    const header = titleBudget > 0 ? truncateToWidth(this.theme.fg("accent", this.title), titleBudget) + suffix : truncateToWidth(usage, width);
+    const lines = [header];
     lines.push(...content.slice(this.offset, this.offset + this.viewportHeight));
     while (lines.length < height - (chrome === 2 ? 1 : 0)) lines.push("");
     if (chrome === 2) {
