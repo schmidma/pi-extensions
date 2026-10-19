@@ -50,7 +50,7 @@ export default function sessionNamingExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("before_agent_start", (event) => {
-		controller?.handlePrompt(event.prompt);
+		if (event.messageType === "user") controller?.handlePrompt(event.prompt);
 	});
 
 	pi.on("session_info_changed", (event) => {

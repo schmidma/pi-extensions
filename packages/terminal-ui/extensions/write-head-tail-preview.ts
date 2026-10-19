@@ -4,7 +4,6 @@ import type {
 	WriteToolInput,
 } from "@earendil-works/pi-coding-agent";
 import {
-	createWriteTool,
 	getLanguageFromPath,
 	highlightCode,
 	keyHint,
@@ -56,27 +55,20 @@ function renderContent(
 }
 
 export default function (pi: ExtensionAPI) {
-	const originalWrite = createWriteTool(process.cwd());
-
-	pi.registerTool({
-		name: "write",
-		label: "write",
-		description: originalWrite.description,
-		promptSnippet: originalWrite.promptSnippet,
-		promptGuidelines: originalWrite.promptGuidelines,
-		parameters: originalWrite.parameters,
-
-		async execute(toolCallId, params, signal, onUpdate) {
-			return originalWrite.execute(toolCallId, params, signal, onUpdate);
-		},
-
-		renderCall(args, theme, context) {
-			const path = typeof args.path === "string" ? args.path : "[invalid path]";
-			let text =
-				theme.fg("toolTitle", theme.bold("write ")) + theme.fg("accent", path);
-			const preview = renderContent(args, context.expanded, theme);
-			if (preview) text += `\n\n${preview}`;
-			return new Text(text, 0, 0);
-		},
+	pi.registerToolRenderer((toolName, next) => {
+		const renderers = next();
+		if (toolName !== "write") return renderers;
+		return {
+			...renderers,
+			renderCall(input, theme, context) {
+				const args = input && typeof input === "object" ? input as Partial<WriteToolInput> : {};
+				const path = typeof args.path === "string" ? args.path : "[invalid path]";
+				let text =
+					theme.fg("toolTitle", theme.bold("write ")) + theme.fg("accent", path);
+				const preview = renderContent(args, context.expanded, theme);
+				if (preview) text += `\n\n${preview}`;
+				return new Text(text, 0, 0);
+			},
+		};
 	});
 }

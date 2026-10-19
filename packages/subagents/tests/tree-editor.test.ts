@@ -1,7 +1,6 @@
 import { beforeAll, expect, test } from "bun:test";
-import { stripVTControlCharacters } from "node:util";
 import { CustomEditor, getPackageDir, initTheme, type ExtensionAPI, type ExtensionContext, type KeybindingsManager, type Theme } from "@earendil-works/pi-coding-agent";
-import { CURSOR_MARKER, Editor, getKeybindings, setKeybindings, KeybindingsManager as TuiKeys, TuiAltScreen, TuiMainScreen, type EditorTheme } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, Editor, getKeybindings, renderFakeCursor, setKeybindings, stripTerminalSequences, KeybindingsManager as TuiKeys, TuiAltScreen, TuiMainScreen, type EditorTheme } from "@earendil-works/pi-tui";
 import { OverviewAttachment, SubagentOverview } from "../extensions/subagents/overview.ts";
 import { decorateTreeEditor } from "../extensions/subagents/tree-editor.ts";
 import completionKeys from "../../completion-keys/extensions/fish-autosuggestion-keys.ts";
@@ -9,6 +8,10 @@ import type { SubagentState } from "../extensions/subagents/state.ts";
 
 beforeAll(() => initTheme("dark", false));
 const plain = (text: string) => text;
+const fakeCursorMarkers = renderFakeCursor("cursor-cell").split("cursor-cell");
+function expectNoCursor(text: string): void {
+  for (const marker of [CURSOR_MARKER, ...fakeCursorMarkers, "\x1b[7m"]) expect(text).not.toContain(marker);
+}
 const editorTheme: EditorTheme = { borderColor: plain, selectList: { selectedPrefix: plain, selectedText: plain, description: plain, scrollInfo: plain, noMatch: plain } };
 const theme = { fg: (_token: string, text: string) => text, bold: plain, getBgAnsi: () => "", style: plain } as Theme;
 // Use the installed host's complete definitions, including modal-only app keys.
@@ -69,14 +72,14 @@ for (const fullscreen of [false, true]) test(`native ${fullscreen ? "fullscreen"
     editor.handleInput("\x1b[D"); expect(editor.getCursor().col).toBe(cursor.col - 1); expect(editor.focused).toBe(true);
     editor.handleInput("\x01");
     const native = editor.render(80);
-    expect(native.join("\n")).toContain("\x1b[7m"); expect(native.join("\n")).toContain(CURSOR_MARKER);
+    expect(native.join("\n")).toContain(CURSOR_MARKER + renderFakeCursor("d"));
     editor.handleInput("\x1b[D");
     expect(f.widget.focused).toBe(true); expect(editor.focused).toBe(false);
     const inactive = editor.render(80).join("\n");
-    expect(inactive.split("\n")).toEqual(native.map(line => stripVTControlCharacters(line.replaceAll(CURSOR_MARKER, ""))));
+    expect(inactive.split("\n")).toEqual(native.map(stripTerminalSequences));
     expect(inactive).toContain("draft"); expect(inactive).not.toContain("Prompt (inactive)");
     expect(inactive.split("\n")[0]).toMatch(/^─+$/); expect(inactive.split("\n").at(-1)).toMatch(/^─+$/);
-    expect(inactive).not.toContain(CURSOR_MARKER); expect(inactive).not.toContain("\x1b[7m");
+    expectNoCursor(inactive);
     f.widget.handleInput("\x1b"); expect(editor.render(80)).toEqual(native); expect(editor.focused).toBe(true); expect(editor.getText()).toBe("draft"); expect(editor.getCursor()).toEqual({ line: 0, col: 0 });
     editor.handleInput("\x1b[D"); f.widget.handleInput("Z"); expect(editor.getText()).toBe("Zdraft"); expect(editor.getCursor().col).toBe(1);
     editor.handleInput("\x1f"); expect(editor.getText()).toBe("draft"); expect(editor.getCursor().col).toBe(0);
@@ -184,14 +187,14 @@ for (const fullscreen of [false, true]) test(`native ${fullscreen ? "fullscreen"
     editor.handleInput("\x01"); editor.handleInput("\x1b[A"); editor.handleInput("\x1b[A"); editor.handleInput("\x1b[D");
     expect(f.widget.focused).toBe(true);
     const text = editor.getText(), cursor = editor.getCursor();
-    const native = CustomEditor.prototype.render.call(editor, 24).map(line => stripVTControlCharacters(line.replaceAll(CURSOR_MARKER, "")));
+    const native = CustomEditor.prototype.render.call(editor, 24).map(stripTerminalSequences);
     let shade = "dark";
     theme.fg = (token, text) => { expect(token).toBe("dim"); return `${shade}:${text}`; };
     const preview = editor.render(24);
     expect(preview).toEqual(native.map(line => `dark:${line}`));
     expect(preview.join("\n")).toContain("first draft"); expect(preview.join("\n")).toContain("second draft");
     expect(preview.join("\n")).not.toContain("Prompt (inactive)");
-    expect(preview.join("\n")).not.toContain(CURSOR_MARKER); expect(preview.join("\n")).not.toContain("\x1b[7m");
+    expectNoCursor(preview.join("\n"));
     shade = "light"; editor.invalidate();
     expect(editor.render(24).join("\n")).toContain("light:"); expect(editor.render(24).join("\n")).not.toContain("dark:");
     expect(editor.getText()).toBe(text); expect(editor.getCursor()).toEqual(cursor);
@@ -202,12 +205,23 @@ for (const fullscreen of [false, true]) test(`native ${fullscreen ? "fullscreen"
     expect(editor.render(80).join("\n")).not.toContain("Prompt (inactive)");
     expect(f.attachment.focus()).toBe(true);
     const inactive = editor.render(80);
-    expect(inactive).toEqual(CustomEditor.prototype.render.call(editor, 80).map(line => stripVTControlCharacters(line.replaceAll(CURSOR_MARKER, ""))));
-    expect(inactive.join("\n")).not.toContain("\x1b[7m");
+    expect(inactive).toEqual(CustomEditor.prototype.render.call(editor, 80).map(stripTerminalSequences));
+    expectNoCursor(inactive.join("\n"));
     f.widget.handleInput("\x1b[D"); expect(editor.focused).toBe(true);
     expect(editor.render(80)).toEqual(CustomEditor.prototype.render.call(editor, 80));
     expect(editor.getText()).toBe(text); expect(editor.getCursor()).toEqual(cursor);
   } finally { theme.fg = original; f.attachment.dispose(); }
+});
+
+test("inactive prompt removes cursor controls without removing enclosed Unicode text or layout", () => {
+  const f = fixture(); f.install();
+  try {
+    const lines = ["─ border ─", `before${CURSOR_MARKER}${renderFakeCursor("👩‍💻")}after`,
+      `${renderFakeCursor("文")} e\u0301`, "\x1b[31mcolored\x1b[0m\x1b[7m reverse\x1b[27m", "\u009b31mC1\u009b0m"];
+    const inactive = f.widget.renderInactivePrompt(lines);
+    expect(inactive).toEqual(["─ border ─", "before👩‍💻after", "文 e\u0301", "colored reverse", "C1"]);
+    expectNoCursor(inactive.join("\n"));
+  } finally { f.attachment.dispose(); }
 });
 
 test("physical and Kitty Left enter tree, Ctrl+B stays editor, Kitty printable returns once, global Ctrl+C keeps app semantics", () => {

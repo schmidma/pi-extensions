@@ -20,6 +20,10 @@ export default function workingPromptExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("before_agent_start", (event, ctx) => {
+		if (event.messageType === "custom") {
+			ctx.ui.setWorkingMessage();
+			return;
+		}
 		const ellipsis = workingMessageEllipsis((text) =>
 			ctx.ui.theme.fg("muted", text),
 		);

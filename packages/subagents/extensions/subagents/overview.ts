@@ -1,6 +1,6 @@
 import { stripVTControlCharacters } from "node:util";
 import { CustomEditor, type ExtensionContext, type KeybindingsManager, type Theme } from "@earendil-works/pi-coding-agent";
-import { CURSOR_MARKER, Key, Loader, matchesKey, SelectList, truncateToWidth, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
+import { Key, Loader, matchesKey, SelectList, stripTerminalSequences, truncateToWidth, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 import { decorateTreeEditor, type TreeCompatibleEditor } from "./tree-editor.ts";
 import { agentTree, type TreeNode, type TreeSource } from "./tree.ts";
 import { relevantTree } from "./relevance.ts";
@@ -145,7 +145,7 @@ export class SubagentOverview implements Component {
   }
   /** Keep native borders, wrapping and scroll indicators; remove cursor paint. */
   renderInactivePrompt(lines: string[]): string[] {
-    return lines.map(line => this.theme.fg("dim", stripVTControlCharacters(line.replaceAll(CURSOR_MARKER, ""))));
+    return lines.map(line => this.theme.fg("dim", stripVTControlCharacters(stripTerminalSequences(line))));
   }
   renderFocusedSelection(width: number): string[] {
     if (this.disposed || !this.focused || !this.allNodes.length || width <= 0) return [];

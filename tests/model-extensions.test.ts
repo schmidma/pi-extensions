@@ -3,6 +3,7 @@ import { afterAll, test, expect, mock } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { BeforeAgentStartEvent } from "@earendil-works/pi-coding-agent";
 const dir = mkdtempSync(join(tmpdir(), "model-extensions-test-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 class Loader {
@@ -38,8 +39,19 @@ test("captured naming context reads fresh current model and external config; shu
 	naming({ on: (n: string, h: any) => handlers[n] = h, registerCommand: (n: string, c: any) => commands[n] = c,
 		getSessionName: () => name, setSessionName: (n: string) => { name = n; names.push(n); }, appendEntry() {} } as any);
 	handlers.session_start({}, ctx);
+	const base = { type: "before_agent_start" as const, systemPrompt: "system",
+		systemPromptOptions: { cwd: dir, selectedTools: [], hiddenTools: [], toolSnippets: {}, toolGuidelines: {},
+			promptGuidelines: [], appendSystemPrompt: "", sections: {}, contextFiles: [], skills: [] } };
+	const custom: BeforeAgentStartEvent = { ...base, messageType: "custom",
+		message: { role: "custom", customType: "subagent-report", content: "Task finished", display: true, timestamp: 0 } };
+	handlers.before_agent_start(custom); await flush();
+	expect(calls).toHaveLength(0); expect(names).toHaveLength(0);
 	selected = { provider: "virtual", id: "second" };
-	handlers.before_agent_start({ prompt: "Fix the session names" }); await flush();
+	const user: BeforeAgentStartEvent = { ...base, messageType: "user", prompt: "Fix the session names" };
+	handlers.before_agent_start(user); await flush();
+	expect(names).toEqual(["A useful session title"]);
+	handlers.before_agent_start(custom); await flush();
+	expect(calls).toHaveLength(1); expect(names).toHaveLength(1);
 	expect(calls[0].model.id).toBe("second");
 	selected = { provider: "virtual", id: "third" };
 	await commands.retitle.handler("", ctx); expect(calls[1].model.id).toBe("third");
