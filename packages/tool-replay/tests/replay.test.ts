@@ -222,6 +222,8 @@ test("current permission hooks, argument hooks, availability, validation, and ca
   expect(textOf(await f.replay("r1"))).toContain("not callable");
   f.api.setActiveTools(["fixture", "replay_tool"]);
   const reloaded = await fixture({ directory: f.directory, manager: SessionManager.open(f.manager.getSessionFile()), requireExtra: true });
+  // Reopening restores the last recorded loadout; activate the target to test its new schema.
+  reloaded.api.setActiveTools(["fixture", "replay_tool"]);
   const invalid = await reloaded.replay(originalHandle);
   expect(invalid.isError).toBe(true);
   expect(textOf(invalid)).toContain("extra");
