@@ -1,0 +1,23 @@
+{
+  "name": "@local/pi-background-bash",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "files": ["extensions/"],
+  "scripts": {
+    "test": "bun test --preload ./tests/host-runtime.ts ./tests",
+    "check": "node ./tests/check-types.mjs"
+  },
+  "pi": {
+    "extensions": ["./extensions/background-bash/index.ts"],
+    "skills": [],
+    "prompts": [],
+    "themes": []
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  }
+}

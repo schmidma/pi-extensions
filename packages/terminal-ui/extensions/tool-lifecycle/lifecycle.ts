@@ -56,14 +56,25 @@ export class Lifecycle {
     for (const [id, phase] of this.phases) if (!terminal(phase)) this.set(id, "cancelled");
   }
 
-  marker(context: RenderContext, theme: Parameters<NonNullable<ToolRenderers["renderCall"]>>[1]): string {
+  marker(context: RenderContext, theme: Parameters<NonNullable<ToolRenderers["renderCall"]>>[1], ownedPhase?: Phase): string {
+    // Process-owned rows already have their own invalidation lifetime. Do not
+    // retain them in the turn-owned animation map or settle them on agent_end.
+    if (ownedPhase !== undefined) {
+      this.redraw.delete(context.toolCallId);
+      this.syncTimer();
+      return this.formatMarker(ownedPhase, theme, Math.floor(Date.now() / 100));
+    }
     let phase = this.phases.get(context.toolCallId);
     if (!phase) phase = context.isPartial ? "cancelled" : context.isError ? "failure" : "success";
     // Result rendering can precede lifecycle dispatch (or happen in a static export).
     if (!context.isPartial && !terminal(phase)) phase = context.isError ? "failure" : "success";
     if (this.enabled && !terminal(phase)) this.redraw.set(context.toolCallId, context.invalidate);
     this.syncTimer();
-    const mark = phase === "running" ? frames[this.frame % frames.length] :
+    return this.formatMarker(phase, theme, this.frame);
+  }
+
+  private formatMarker(phase: Phase, theme: Parameters<NonNullable<ToolRenderers["renderCall"]>>[1], frame: number) {
+    const mark = phase === "running" ? frames[frame % frames.length] :
       ({ composing: "✎", ready: "○", success: "✓", failure: "×", cancelled: "-" } as const)[phase];
     return theme.fg(phase === "failure" ? "error" : "muted", mark);
   }

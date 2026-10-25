@@ -8,7 +8,7 @@
     "packages/*"
   ],
   "scripts": {
-    "test": "npm run test:host && npm run test:later && npm run test:ui && npm run test:rewrite && npm run test:model-extensions && npm run test:copy-code && npm run test:subagents && npm run test:replay",
+    "test": "npm run test:host && npm run test:later && npm run test:ui && npm run test:rewrite && npm run test:model-extensions && npm run test:copy-code && npm run test:subagents && npm run test:replay && npm run test:background-bash",
     "test:host": "node --test tests/pi-host.test.mjs",
     "test:later": "node --test packages/later/extensions/later/*.test.ts",
     "test:ui": "bun test --preload ./packages/subagents/tests/host-runtime.ts ./packages/terminal-ui/extensions ./packages/session-naming/extensions",
@@ -16,6 +16,7 @@
     "test:model-extensions": "bun test ./tests/model-extensions.test.ts",
     "test:copy-code": "node --test packages/copy-code/extensions/copy-code/index.test.mjs",
     "test:subagents": "bun test --preload ./packages/subagents/tests/host-runtime.ts ./packages/subagents/tests",
-    "test:replay": "bun test ./packages/tool-replay/tests"
+    "test:replay": "bun test ./packages/tool-replay/tests",
+    "test:background-bash": "bun test --preload ./packages/background-bash/tests/host-runtime.ts ./packages/background-bash/tests"
   }
 }

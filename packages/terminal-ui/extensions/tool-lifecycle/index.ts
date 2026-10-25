@@ -2,10 +2,13 @@ import { stripVTControlCharacters } from "node:util";
 import { createEditToolDefinition, type ExtensionAPI, type ToolRenderers } from "@earendil-works/pi-coding-agent";
 import { Box, type Component, type TuiMouseEvent, Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { sanitizeSingleLine } from "../shared/terminal-text.ts";
-import { Lifecycle, watchLifecycle } from "./lifecycle.ts";
+import { Lifecycle, watchLifecycle, type Phase } from "./lifecycle.ts";
 
 // Optional cooperation for self-framed renderers. No cross-package imports or shared-state keys.
 const headingMarker = Symbol.for("pi-extensions.tool-heading-marker");
+// Optional native-heading decoration. The owner supplies its phase and redraws
+// when work outlives the tool acknowledgement; no lifecycle events are fabricated.
+const headingDecorator = Symbol.for("pi-extensions.tool-heading-decorator");
 type CallContext = Parameters<NonNullable<ToolRenderers["renderCall"]>>[2];
 // Public definitions expose stable native renderer identities, without executing a tool.
 const nativeEdit = createEditToolDefinition(process.cwd());
@@ -88,7 +91,9 @@ export function decorate(renderers: ToolRenderers | undefined, lifecycle: Lifecy
       const previous = context.lastComponent;
       const innerContext: CallContext & { [key: symbol]: unknown } = { ...context,
         lastComponent: previous instanceof MarkedCall ? previous.inner : previous,
-        [headingMarker]: marker };
+        [headingMarker]: marker,
+        [headingDecorator]: (heading: Component, phase?: () => Phase | undefined) =>
+          new MarkedCall(heading, () => lifecycle.marker(context, theme, phase?.())) };
       const component = renderCall(args, theme, innerContext);
       if (isNativeEdit) {
         markNativeEditHeading(component, marker);

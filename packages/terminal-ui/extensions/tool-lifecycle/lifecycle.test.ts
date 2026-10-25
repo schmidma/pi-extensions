@@ -74,6 +74,24 @@ test("cancellation during streaming or execution, nested calls and known skipped
   life.stop();
 });
 
+test("owner-supplied phases outlive acknowledgement and agent end without retaining an animation", async () => {
+  const { life, emit } = harness();
+  let redraws = 0;
+  const row = context("owned", () => redraws++, { isPartial: false });
+  emit("tool_execution_end", { toolCallId: "owned", isError: false, result: result("accepted") });
+  life.set("sibling", "running");
+  emit("agent_end");
+  expect(life.marker(row, theme, "running")).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
+  expect(marker(life, "sibling")).toBe("-");
+  expect(life.marker(row, theme, "failure")).toBe("×");
+  expect(life.marker(row, theme, "cancelled")).toBe("-");
+  expect(life.marker(row, theme, "success")).toBe("✓");
+  expect(life.marker(row, theme)).toBe("✓");
+  await delay(130);
+  expect(redraws).toBe(0); // The process owner, not the turn lifecycle, redraws it.
+  life.stop();
+});
+
 test("animation ignores unrelated dialogs and stops at completion/shutdown", async () => {
   const { life, emit } = harness();
   let redraws = 0;
