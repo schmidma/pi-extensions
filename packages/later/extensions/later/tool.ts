@@ -274,21 +274,26 @@ function renderLaterResult(options: {
 	theme: Theme;
 }): Text {
 	const { details, contentText, expanded, theme } = options;
-	if (!details || details.action === "get") return new Text(contentText, 0, 0);
+	if (!details) return new Text(expanded ? contentText : preview(contentText), 0, 0);
+	if (expanded && details.item) return new Text(formatItem(details.item), 0, 0);
 	if (details.action === "list" && details.items) {
 		const shown = expanded ? details.items : details.items.slice(0, 5);
 		let text = theme.fg("success", `${details.items.length} later item(s)`);
 		for (const item of shown)
-			text += `\n${theme.fg("accent", item.id)} ${theme.fg("muted", `[${item.scope}] ${preview(item.text, 90)}`)}`;
+			text += expanded
+				? `\n\n${formatItem(item)}`
+				: `\n${theme.fg("accent", item.id)} ${theme.fg("muted", `[${item.scope}] ${preview(item.text, 90)}`)}`;
 		if (!expanded && details.items.length > shown.length)
 			text += `\n${theme.fg("dim", `... ${details.items.length - shown.length} more`)}`;
 		return new Text(text, 0, 0);
 	}
 	const item = details.item;
+	if (!item) return new Text(theme.fg("muted", "Done"), 0, 0);
+	const status = details.action === "get"
+		? theme.fg("muted", `[${item.lifecycle}, ${item.scope}]`)
+		: theme.fg("success", "OK");
 	return new Text(
-		item
-			? `${theme.fg("success", "OK")} ${theme.fg("accent", item.id)} ${theme.fg("muted", preview(item.text, 100))}`
-			: theme.fg("muted", "Done"),
+		`${status} ${theme.fg("accent", item.id)} ${theme.fg("muted", preview(item.text, 100))}`,
 		0,
 		0,
 	);
