@@ -774,13 +774,16 @@ test("native boundary append failure retains the outcome for disk-based recovery
       return persist(entry);
     };
     const result = rootRun.catch(error => error);
-    parent.finish("yield");
-    await bounded(result);
-    expect(f.manager.getEntries().some(entry => entry.type === "custom_message" && entry.customType === REPORT_TYPE)).toBe(true);
+    try {
+      parent.finish("yield");
+      await bounded(result);
+    } finally { (f.manager as any)._persist = persist; }
     expect(readFileSync(f.manager.getSessionFile()!, "utf8").trim().split("\n").map(line => JSON.parse(line))
       .filter(entry => entry.type === "custom_message" && entry.customType === REPORT_TYPE)).toHaveLength(0);
     expect(service.store.state.runs[ack.runId].delivered).toBe(false);
-    expect(JSON.parse(readFileSync(join(service.store.directory, "registry.json"), "utf8")).runs[ack.runId].delivered).toBe(false);
+    const saved = JSON.parse(readFileSync(join(service.store.directory, "registry.json"), "utf8")).runs[ack.runId];
+    expect(saved.delivered).toBe(false);
+    expect(saved.outcome.text).toBe("durable report despite root write failure");
     await f.cleanup();
     closed = true;
     const recovered = new Coordinator(new SubagentStore(f.directory, key), f.factory);

@@ -6,6 +6,7 @@ import { SubagentOverview } from "../extensions/subagents/overview.ts";
 import { runElapsed } from "../extensions/subagents/presentation.ts";
 import { REPORT_TYPE, reportText, type RunRecord, type SubagentRecord, type SubagentState } from "../extensions/subagents/state.ts";
 import { agentTree } from "../extensions/subagents/tree.ts";
+import { messageRenderOptions } from "./render-options.ts";
 
 beforeAll(() => initTheme("dark", false));
 
@@ -182,7 +183,7 @@ test("report headers order marker/name/ID/status/time in both views, retain orig
         details: { agentId: owner.id, runId: run.id, outcome } };
       const bytes = JSON.stringify({ message, state: f.state });
       for (const expanded of [false, true]) {
-        const lines = renderer(message, { expanded, outputPad: 0 }, theme)!.render(180);
+        const lines = renderer(message, messageRenderOptions(expanded), theme)!.render(180);
         expect(lines[1].trim()).toBe(`${marker} Name 0 [id-0]${outcome === "completed" ? "" : ` · ${outcome}`} · 63.0s`);
         expect(lines[1]).not.toContain("Subagent Name"); expect(lines[1]).not.toContain("finished");
         if (expanded) for (const original of ["Subagent Name 0", "agent_id: id-0", "run_id: run-0", "FULL REPORT"]) expect(lines.join("\n")).toContain(original);
@@ -190,7 +191,7 @@ test("report headers order marker/name/ID/status/time in both views, retain orig
       expect(JSON.stringify({ message, state: f.state })).toBe(bytes);
       for (const aliases of [{ runId: "foreign" }, { invocationId: "foreign" }, { deliveryId: "foreign" }]) {
         const mismatched = { ...message, details: { ...message.details, ...aliases } };
-        expect(renderer(mismatched, { expanded: false, outputPad: 0 }, theme)!.render(180).join("\n")).not.toContain("63.0s");
+        expect(renderer(mismatched, messageRenderOptions(false), theme)!.render(180).join("\n")).not.toContain("63.0s");
       }
     }
   } finally { f.view.dispose(); }

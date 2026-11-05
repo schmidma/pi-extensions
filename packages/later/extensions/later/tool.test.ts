@@ -9,6 +9,7 @@ import type { LaterItem } from "./types.ts";
 
 // Resolve the same host-provided dependencies Pi uses, without installing local copies.
 const host = findPiHost("PI_LATER_HOST");
+const { validateToolArguments } = await import(pathToFileURL(resolveHostPackage(host, "@earendil-works/pi-ai").entry!).href);
 const dependencies = new Map(
 	["@earendil-works/pi-ai", "@earendil-works/pi-tui", "typebox"].map((name) => [
 		name,
@@ -70,6 +71,25 @@ function assertFullItem(text: string) {
 		assert.ok(text.includes(expected), `Missing ${expected}`);
 	}
 }
+
+test("string enums advertise and validate every supported action, lifecycle, and scope", () => {
+	const tool = setup();
+	const properties = (tool.parameters as { properties: Record<string, { type?: string; enum?: string[] }> }).properties;
+	const enums = {
+		action: ["list", "get", "add", "update", "archive", "delete", "restore", "move"],
+		lifecycle: ["inbox", "archived", "deleted"],
+		scope: ["session", "project", "global", "all"],
+	};
+	const validate = (args: Record<string, unknown>) => validateToolArguments(tool, {
+		type: "toolCall", id: "enum-validation", name: tool.name, arguments: args,
+	});
+	for (const [field, values] of Object.entries(enums)) {
+		assert.equal(properties[field].type, "string");
+		assert.deepEqual(properties[field].enum, values);
+		for (const value of values) assert.equal(validate({ action: "list", [field]: value })[field], value);
+		assert.throws(() => validate({ action: "list", [field]: "unsupported" }));
+	}
+});
 
 test("get collapses to an item preview, expands fully, and preserves agent output", async () => {
 	const tool = setup();

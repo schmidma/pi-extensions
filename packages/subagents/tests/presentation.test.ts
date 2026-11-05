@@ -8,6 +8,7 @@ import { TranscriptInspector } from "../extensions/subagents/inspector.ts";
 import { registerBridge } from "../extensions/subagents/bridge.ts";
 import { REPORT_TYPE, reportText, type OutcomeStatus, type RunRecord, type SubagentRecord, type SubagentState } from "../extensions/subagents/state.ts";
 import type { TreeSource } from "../extensions/subagents/tree.ts";
+import { messageRenderOptions } from "./render-options.ts";
 
 beforeAll(() => initTheme("dark", false));
 const theme = { fg: (_token: string, text: string) => text, bold: (text: string) => text, getBgAnsi: () => "", style: (text: string) => text } as unknown as Theme;
@@ -209,7 +210,7 @@ test("acknowledged cards and named reports redraw without registry lookups", () 
     content: `Subagent ${ack.name} - completed\n\nFull report`, display: true, timestamp: 1,
     details: { agentId: ack.agent_id, outcome: "completed" } };
   for (const expanded of [false, true]) {
-    expect(reportRenderer(lookup)(message, { expanded, outputPad: 0 }, theme)!.render(120).join("\n")).toContain(ack.name);
+    expect(reportRenderer(lookup)(message, messageRenderOptions(expanded), theme)!.render(120).join("\n")).toContain(ack.name);
   }
   expect(lookups).toBe(0);
 });
@@ -319,9 +320,9 @@ test("historical reports and malformed details never throw or hide full persiste
     ["malformed report FULL BODY", ["bad"]], ["malformed outcome FULL BODY", { outcome: { toString: null, valueOf: null } }], ["", null],
   ] as const) {
     const message = { role: "custom" as const, customType: REPORT_TYPE, content, details, display: true, timestamp: 1 };
-    const collapsed = renderer(message, { expanded: false, outputPad: 0 }, theme)!.render(120).join("\n");
+    const collapsed = renderer(message, messageRenderOptions(false), theme)!.render(120).join("\n");
     expect(collapsed).toContain(content.includes("Named") ? "Named" : details && !Array.isArray(details) && ("specialistId" in details || "agentId" in details) ? "Saved name" : "Subagent report");
-    const expanded = strip(renderer(message, { expanded: true, outputPad: 0 }, theme)!.render(120).join("\n"));
+    const expanded = strip(renderer(message, messageRenderOptions(true), theme)!.render(120).join("\n"));
     for (const line of content.split("\n").filter(Boolean)) expect(expanded).toContain(line);
     if (!content) expect(expanded).toContain("No final assistant text");
   }
@@ -427,7 +428,7 @@ test("report wall seconds follow captured historical run IDs across resumes, ali
     const message = { role: "custom" as const, customType: REPORT_TYPE, content, details: { name: owner.name, ...details }, display: true, timestamp: 1 };
     const original = JSON.stringify(message);
     for (const expanded of [false, true]) {
-      const component = renderer(message, { expanded, outputPad: 1 }, theme)!;
+      const component = renderer(message, messageRenderOptions(expanded, 1), theme)!;
       for (let draw = 0; draw < 3; draw++) {
         const output = strip(component.render(160).join("\n"));
         expect(output).toContain(run === first ? "63.4s" : "7.2s");
@@ -448,19 +449,19 @@ test("missing, invalid, foreign and nonterminal timing is omitted, zero/sub-tent
     { ...saved, phase: "running" }, { ...saved, startedAt: "bad" }, { ...saved, endedAt: "bad" }, { ...saved, endedAt: undefined },
     { ...saved, startedAt: 0 }, { ...saved, endedAt: "1970-01-01T00:00:00.000Z" }]) {
     const renderer = reportRenderer(() => undefined, (() => value) as RunLookup);
-    for (const expanded of [false, true]) expect(strip(renderer(base, { expanded, outputPad: 0 }, theme)!.render(160).join("\n"))).not.toMatch(/\d+\.\d+s/);
+    for (const expanded of [false, true]) expect(strip(renderer(base, messageRenderOptions(expanded), theme)!.render(160).join("\n"))).not.toMatch(/\d+\.\d+s/);
   }
   const renderer = reportRenderer(() => undefined, id => id === saved.id ? saved : undefined);
   for (const details of [{ ...base.details, runId: "unknown" }, { ...base.details, agentId: "foreign" },
     { ...base.details, agent_id: "conflicting-agent" }, { ...base.details, specialistId: "conflicting-agent" }]) {
-    expect(strip(renderer({ ...base, details }, { expanded: false, outputPad: 0 }, theme)!.render(160).join("\n"))).not.toMatch(/\d+\.\d+s/);
+    expect(strip(renderer({ ...base, details }, messageRenderOptions(false), theme)!.render(160).join("\n"))).not.toMatch(/\d+\.\d+s/);
   }
   expect(strip(renderer({ ...base, content: reportText(owner, saved).replace(`agent_id: ${owner.id}`, "agent_id: foreign") },
-    { expanded: false, outputPad: 0 }, theme)!.render(160).join("\n"))).not.toMatch(/\d+\.\d+s/);
+    messageRenderOptions(false), theme)!.render(160).join("\n"))).not.toMatch(/\d+\.\d+s/);
   saved.endedAt = saved.startedAt;
-  expect(strip(renderer(base, { expanded: false, outputPad: 0 }, theme)!.render(160).join("\n"))).toContain("0.0s");
+  expect(strip(renderer(base, messageRenderOptions(false), theme)!.render(160).join("\n"))).toContain("0.0s");
   saved.endedAt = new Date(Date.parse(saved.startedAt) + 40).toISOString();
-  expect(strip(renderer(base, { expanded: false, outputPad: 0 }, theme)!.render(160).join("\n"))).toContain("0.0s");
+  expect(strip(renderer(base, messageRenderOptions(false), theme)!.render(160).join("\n"))).toContain("0.0s");
 });
 
 test("already-hydrated native reports acquire timing at draw time after read-only attachment, without expansion toggles", () => {
@@ -490,7 +491,7 @@ test("bridge renderer stays lazy and read-only; optional run lookup and captured
         resolve: async () => { activations++; return { service, models: [] } as any; },
         ...(explicit ? { lookupRun: (id: string) => snapshot.runs[id] } : {}) });
     const message = { role: "custom" as const, customType: REPORT_TYPE, content: reportText(owner, run), display: true, timestamp: 1 };
-    const component = renderer!(message, { expanded: false, outputPad: 0 }, theme)!;
+    const component = renderer!(message, messageRenderOptions(false), theme)!;
     expect(strip(component.render(160).join("\n"))).toContain(explicit ? "63.4s" : owner.name);
     expect(activations).toBe(0);
     if (!explicit) {

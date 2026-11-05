@@ -186,17 +186,27 @@ test("failed native root append is not a durable receipt", async () => {
   const drafts = f.service.beforeSettle();
   const persist = (f.parent as any)._persist;
   (f.parent as any)._persist = () => { throw new Error("injected root append failure"); };
-  expect(() => commit(f.parent, drafts)).toThrow("injected root append failure");
-  (f.parent as any)._persist = persist;
-  expect(f.parent.getEntries().some(entry => entry.type === "custom_message")).toBe(true);
-  expect(() => f.service.postCommit()).toThrow("durable root receipt");
+  try { expect(() => commit(f.parent, drafts)).toThrow("injected root append failure"); }
+  finally { (f.parent as any)._persist = persist; }
+  const parent = SessionManager.open(f.parent.getSessionFile()!);
+  expect(parent.getEntries().some(entry => entry.type === "custom_message" && entry.customType === REPORT_TYPE)).toBe(false);
   expect(f.store.state.runs[ack.runId].delivered).toBe(false);
+  const saved = JSON.parse(readFileSync(join(f.store.directory, "registry.json"), "utf8")).runs[ack.runId];
+  expect(saved.delivered).toBe(false);
+  expect(saved.outcome.text).toBe("must survive");
   await f.service.shutdown();
   const reopened = new Coordinator(new SubagentStore(f.directory, f.key), f.factory);
-  reopened.attach({ ...f.binding, manager: SessionManager.open(f.parent.getSessionFile()!) }, f.factory);
-  expect(reopened.beforeSettle()?.entries).toHaveLength(1);
-  expect(f.factory.children).toHaveLength(1);
-  await reopened.shutdown();
+  try {
+    reopened.attach({ ...f.binding, manager: parent }, f.factory);
+    const recovered = reopened.beforeSettle();
+    expect(recovered?.entries).toHaveLength(1);
+    expect(recovered?.entries[0].content).toEndWith("must survive");
+    expect(f.factory.children).toHaveLength(1);
+    commit(parent, recovered);
+    reopened.postCommit();
+    expect(reopened.store.state.runs[ack.runId].delivered).toBe(true);
+    expect(reopened.beforeSettle()).toBeUndefined();
+  } finally { await reopened.shutdown(); }
 });
 
 for (const fail of [false, true]) test(`root receipt fsync precedes registry acknowledgement, failure=${fail}`, async () => {

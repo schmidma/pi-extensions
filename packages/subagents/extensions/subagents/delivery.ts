@@ -59,7 +59,7 @@ export class Mailbox {
       if (!file) throw new Error("Receiver session has no file");
       const fd = openSync(file, "r");
       try {
-        // append mutates native memory before writing; abandoned branches can prove receipt, not consumption.
+        // Verify and flush disk receipts before acknowledging delivery; abandoned branches prove receipt, not consumption.
         const receipts = new Set<string>();
         for (const line of readFileSync(fd, "utf8").split("\n")) {
           if (!line.trim()) continue;

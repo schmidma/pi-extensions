@@ -1,4 +1,3 @@
-import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
@@ -12,7 +11,7 @@ import type {
 	RepositoryContext,
 } from "./types.ts";
 
-const LaterAction = StringEnum([
+const LaterAction = Type.Enum([
 	"list",
 	"get",
 	"add",
@@ -21,9 +20,9 @@ const LaterAction = StringEnum([
 	"delete",
 	"restore",
 	"move",
-] as const);
-const LaterLifecycleSchema = StringEnum(["inbox", "archived", "deleted"] as const);
-const LaterScopeSchema = StringEnum(["session", "project", "global", "all"] as const);
+] as const, { type: "string" });
+const LaterLifecycleSchema = Type.Enum(["inbox", "archived", "deleted"] as const, { type: "string" });
+const LaterScopeSchema = Type.Enum(["session", "project", "global", "all"] as const, { type: "string" });
 
 const LaterParameters = Type.Object({
 	action: LaterAction,
